@@ -173,16 +173,37 @@ final class BrowserState: ObservableObject {
     }
 }
 
-/// Records a history visit when a tab finishes loading a real http(s) page.
-/// Only adds the recording hook — no other navigation behaviour is changed.
+/// Observes successful page loads of real http(s) pages: records history and
+/// ingests the page's first-party declared favicons. Adds these hooks only — no
+/// other navigation behaviour is changed.
 final class HistoryRecorder: NSObject, WKNavigationDelegate {
+    /// Reads `<link rel>` icon hrefs, apple-touch-icon first (usually higher-res),
+    /// resolved to absolute URLs by the DOM.
+    private static let iconLinkJS = """
+    (function () {
+      function hrefs(sel) {
+        return Array.prototype.map.call(document.querySelectorAll(sel), function (l) { return l.href; });
+      }
+      return hrefs("link[rel~='apple-touch-icon'], link[rel~='apple-touch-icon-precomposed']")
+        .concat(hrefs("link[rel~='icon']"));
+    })()
+    """
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         // Skip blank/new-tab/about:blank and non-web schemes; record real pages only.
         guard let url = webView.url,
               let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = url.host, !host.isEmpty else { return }
+
         let title = webView.title
         Task { await HistoryStore.shared.recordVisit(url: url, title: title) }
+
+        // Favicon: read the page's declared first-party icons and ingest them.
+        Task { @MainActor in
+            let hrefs = (try? await webView.evaluateJavaScript(Self.iconLinkJS)) as? [String] ?? []
+            let candidates = hrefs.compactMap { URL(string: $0) }
+            await FaviconService.shared.ingestDeclaredIcons(host: host, candidateURLs: candidates)
+        }
     }
 }
 
@@ -453,6 +474,9 @@ struct ContentView: View {
             #if DEBUG
             if CommandLine.arguments.contains("--run-bookmark-selftest") {
                 await BookmarkStore.shared.runSelfTest()
+            }
+            if CommandLine.arguments.contains("--run-favicon-selftest") {
+                await FaviconService.shared.runSelfTest()
             }
             #endif
         }

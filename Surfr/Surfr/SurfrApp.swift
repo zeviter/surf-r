@@ -48,6 +48,11 @@ struct SurfrApp: App {
                     Task { await BookmarkStore.shared.runSelfTest() }
                 }
                 .keyboardShortcut("b", modifiers: [.command, .control, .option])
+
+                Button("Run Favicon Self-Test") {
+                    Task { await FaviconService.shared.runSelfTest() }
+                }
+                .keyboardShortcut("f", modifiers: [.command, .control, .option])
                 #endif
             }
         }
