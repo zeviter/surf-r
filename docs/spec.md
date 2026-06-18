@@ -74,30 +74,56 @@ Each phase must build and run before the next. Commit per slice.
   last-good fallback on any failure, EasyPrivacy, cosmetic element-hiding via `WKUserScript`, and
   multiple-list chunking to respect the per-list cap.
 - **2c — Popup gate (F4).** Implement the `WKUIDelegate` popup gate + `TrustPolicy` allowlist.
+- **2d — Web Inspector (DEBUG).** Set `WKWebView.isInspectable = true` in **DEBUG builds only** so
+  Safari's Web Inspector (Develop ▸ Surfr) can attach to a web view to watch network requests and
+  the DOM. A development tool — **never shipped enabled** — and the instrument used for all
+  subsequent network / cosmetic / anti-adblock debugging.
 
-### Phase 3 — Bookmarks & history (macOS)
+### Phase 3 — Anti-adblock evasion (macOS)
+- **Goal.** View pages that demand you disable your adblocker, without actually disabling blocking.
+- **Realistic scope — read this.** Anti-adblock is an arms race, not a toggle: the aim is to defeat
+  the *common* detection patterns, accepting that some stubborn sites will still need case-by-case
+  handling. State this plainly so forkers aren't misled into expecting a universal, permanent bypass.
+- **Detection methods to counter:** bait requests (decoy `ads.js`-style files fetched to see if
+  they're blocked), bait elements (decoy ad `<div>`s checked for being hidden/removed),
+  missing-global checks (e.g. `adsbygoogle` and ad-SDK objects being absent), and packaged
+  anti-adblock scripts.
+- **Approach:**
+  - (a) Add a maintained anti-adblock filter list (AdGuard / EasyList family) so the counters are
+    maintained upstream rather than hand-written — same philosophy as the ad/tracker lists in Phase 2.
+  - (b) For bait requests, return harmless valid stub responses via request interception
+    (`WKURLSchemeHandler`) and/or a document-start `WKUserScript` that defines the globals sites
+    probe for, so missing-global checks pass.
+- **Mechanism note (important).** This is a *different* mechanism from the declarative
+  `WKContentRuleList` blocking in Phase 2: it **intercepts and injects** rather than merely blocking,
+  and the injected JS runs on **every page** — so it carries its own privacy review (keep it minimal,
+  no data egress, audit every injected script before it ships).
+- **Pairs with 2d (Web Inspector).** You can't tell which bait a given wall keys on without watching
+  its requests and DOM live — diagnose with the inspector, then add the matching list rule or stub.
+
+### Phase 4 — Bookmarks & history (macOS)
 - F6: `BookmarkStore`; New Tab page shows the bookmark grid.
 - F7: `HistoryStore` with full-text search, date grouping, auto-expiry; local-only.
 
-### Phase 4 — IP routing (macOS)
+### Phase 5 — IP routing (macOS)
 - F1: `ProxyManager` wiring `proxyConfigurations` (SOCKS5) to the user's self-hosted WireGuard or a
   local Tor SOCKS port. WebRTC shim + DNS-through-tunnel. Guard against the known iOS 18.x
   `proxyConfigurations` crash pattern (set before first load; availability-gate).
 
-### Phase 5 — Promote core + iOS app
+### Phase 6 — Promote core + iOS app
 - Extract stable logic into `SurfrCore`; add the iOS SwiftUI target reusing it (`UIViewRepresentable`
   WKWebView). Re-verify F1–F8 on iOS.
 
-### Phase 6 — Password vault
+### Phase 7 — Password vault
 - F5 (storage): encrypted store (CryptoKit AES-GCM; key wrapped by Secure Enclave / master password
   via Argon2id). Generator + TOTP. Face/Touch ID gate. App Group shared with the autofill extension.
 
-### Phase 7 — System autofill
+### Phase 8 — System autofill
 - F5 (system): `ASCredentialProviderExtension` targets (iOS + macOS); QuickType + full UI; passkeys
   (`ASPasskeyCredential`, iOS 17+). Note: fills detected login fields/QuickType/Safari, **not** the
   generic context-menu on arbitrary text fields (Apple-private) — same as all third-party managers.
 
-### Phase 8 — Sync
+### Phase 9 — Sync
 - CloudKit private DB, **end-to-end encrypted** (encrypt before upload) for vault, bookmarks,
   settings. History stays local unless explicitly opted in. Conflict handling: last-write-wins +
   per-record versioning.
