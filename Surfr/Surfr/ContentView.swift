@@ -101,6 +101,8 @@ final class BrowserState: ObservableObject {
 
     /// Gates `window.open` pop-ups (F4) and handles JS dialogs for every tab.
     let popupGate = PopupGate()
+    /// Records successful page loads into history (slice 1: data layer only).
+    let historyRecorder = HistoryRecorder()
 
     init() {
         let first = Tab(url: homeURL)
@@ -150,9 +152,24 @@ final class BrowserState: ObservableObject {
         return webView
     }
 
-    /// Route a tab's pop-up/dialog callbacks through the shared gate.
+    /// Route a tab's pop-up/dialog callbacks through the shared gate, and its
+    /// navigation events through the history recorder.
     private func wire(_ tab: Tab) {
         tab.webView.uiDelegate = popupGate
+        tab.webView.navigationDelegate = historyRecorder
+    }
+}
+
+/// Records a history visit when a tab finishes loading a real http(s) page.
+/// Only adds the recording hook — no other navigation behaviour is changed.
+final class HistoryRecorder: NSObject, WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // Skip blank/new-tab/about:blank and non-web schemes; record real pages only.
+        guard let url = webView.url,
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host, !host.isEmpty else { return }
+        let title = webView.title
+        Task { await HistoryStore.shared.recordVisit(url: url, title: title) }
     }
 }
 
@@ -335,6 +352,17 @@ struct ContentView: View {
         .task {
             // Compile the bundled seed ad-block list and apply it to every tab.
             await ContentBlocker.shared.prepare()
+        }
+        .task {
+            // Expire history older than the retention window, once per launch.
+            await HistoryStore.shared.prune(olderThan: Date().addingTimeInterval(-HistoryStore.retentionInterval))
+            #if DEBUG
+            // Optional non-interactive trigger for the history self-test (same as
+            // the DEBUG menu item / ⌃⌥⌘H), e.g. `Surfr --run-history-selftest`.
+            if CommandLine.arguments.contains("--run-history-selftest") {
+                await HistoryStore.shared.runSelfTest()
+            }
+            #endif
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusOmnibox)) { _ in
             omniboxFocused = true

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		AA01000000000000000000A3 /* ContentBlockerConverter in Frameworks */ = {isa = PBXBuildFile; productRef = AA01000000000000000000A2 /* ContentBlockerConverter */; };
+		AA01000000000000000000B3 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = AA01000000000000000000B2 /* GRDB */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA01000000000000000000A3 /* ContentBlockerConverter in Frameworks */,
+				AA01000000000000000000B3 /* GRDB in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +73,7 @@
 			name = Surfr;
 			packageProductDependencies = (
 				AA01000000000000000000A2 /* ContentBlockerConverter */,
+				AA01000000000000000000B2 /* GRDB */,
 			);
 			productName = Surfr;
 			productReference = 00458F262FE4558900320D64 /* Surfr.app */;
@@ -102,6 +105,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AA01000000000000000000A1 /* XCRemoteSwiftPackageReference "SafariConverterLib" */,
+				AA01000000000000000000B1 /* XCRemoteSwiftPackageReference "GRDB" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 00458F272FE4558900320D64 /* Products */;
@@ -364,6 +368,14 @@
 				minimumVersion = 4.3.0;
 			};
 		};
+		AA01000000000000000000B1 /* XCRemoteSwiftPackageReference "GRDB" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/groue/GRDB.swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 7.11.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -371,6 +383,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA01000000000000000000A1 /* XCRemoteSwiftPackageReference "SafariConverterLib" */;
 			productName = ContentBlockerConverter;
+		};
+		AA01000000000000000000B2 /* GRDB */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA01000000000000000000B1 /* XCRemoteSwiftPackageReference "GRDB" */;
+			productName = GRDB;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

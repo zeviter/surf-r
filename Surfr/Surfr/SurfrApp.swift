@@ -29,6 +29,13 @@ struct SurfrApp: App {
                     NotificationCenter.default.post(name: .focusOmnibox, object: nil)
                 }
                 .keyboardShortcut("l", modifiers: .command)
+
+                #if DEBUG
+                Button("Run History Self-Test") {
+                    Task { await HistoryStore.shared.runSelfTest() }
+                }
+                .keyboardShortcut("h", modifiers: [.command, .control, .option])
+                #endif
             }
         }
     }
