@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AA01000000000000000000A3 /* ContentBlockerConverter in Frameworks */ = {isa = PBXBuildFile; productRef = AA01000000000000000000A2 /* ContentBlockerConverter */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		00458F262FE4558900320D64 /* Surfr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Surfr.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA01000000000000000000A3 /* ContentBlockerConverter in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = Surfr;
 			packageProductDependencies = (
+				AA01000000000000000000A2 /* ContentBlockerConverter */,
 			);
 			productName = Surfr;
 			productReference = 00458F262FE4558900320D64 /* Surfr.app */;
@@ -95,6 +101,9 @@
 			mainGroup = 00458F1D2FE4558900320D64;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
+			packageReferences = (
+				AA01000000000000000000A1 /* XCRemoteSwiftPackageReference "SafariConverterLib" */,
+			);
 			productRefGroup = 00458F272FE4558900320D64 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -345,6 +354,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AA01000000000000000000A1 /* XCRemoteSwiftPackageReference "SafariConverterLib" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/AdguardTeam/SafariConverterLib";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.3.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA01000000000000000000A2 /* ContentBlockerConverter */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA01000000000000000000A1 /* XCRemoteSwiftPackageReference "SafariConverterLib" */;
+			productName = ContentBlockerConverter;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 00458F1E2FE4558900320D64 /* Project object */;
 }

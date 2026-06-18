@@ -15,7 +15,6 @@ xcuserdata/
 # Swift Package Manager
 .build/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
-Package.resolved
 
 # macOS
 .DS_Store
