@@ -100,10 +100,10 @@
 			);
 			mainGroup = 00458F1D2FE4558900320D64;
 			minimizedProjectReferenceProxies = 1;
-			preferredProjectObjectVersion = 77;
 			packageReferences = (
 				AA01000000000000000000A1 /* XCRemoteSwiftPackageReference "SafariConverterLib" */,
 			);
+			preferredProjectObjectVersion = 77;
 			productRefGroup = 00458F272FE4558900320D64 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
