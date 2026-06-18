@@ -15,6 +15,16 @@ struct SurfrApp: App {
         }
         .commands {
             CommandGroup(after: .newItem) {
+                Button("New Tab") {
+                    NotificationCenter.default.post(name: .newTab, object: nil)
+                }
+                .keyboardShortcut("t", modifiers: .command)
+
+                Button("Close Tab") {
+                    NotificationCenter.default.post(name: .closeTab, object: nil)
+                }
+                .keyboardShortcut("w", modifiers: .command)
+
                 Button("Open Location…") {
                     NotificationCenter.default.post(name: .focusOmnibox, object: nil)
                 }
