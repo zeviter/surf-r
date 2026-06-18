@@ -13,5 +13,13 @@ struct SurfrApp: App {
         WindowGroup {
             ContentView()
         }
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("Open Location…") {
+                    NotificationCenter.default.post(name: .focusOmnibox, object: nil)
+                }
+                .keyboardShortcut("l", modifiers: .command)
+            }
+        }
     }
 }
