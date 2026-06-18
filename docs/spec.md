@@ -102,6 +102,10 @@ Each phase must build and run before the next. Commit per slice.
   its requests and DOM live — diagnose with the inspector, then add the matching list rule or stub.
 
 ### Phase 4 — Bookmarks & history (macOS)
+- **UI/layout/behaviour:** `docs/ui-wireframes.md` is authoritative for this phase (rail, spotlight,
+  bookmarks, history) — read it before building.
+- Supersedes the always-visible omnibox: the address bar becomes **summon-only** (`⌘L`) per the
+  wireframes, while keeping the existing URL-vs-DuckDuckGo-search parsing unchanged.
 - F6: `BookmarkStore`; New Tab page shows the bookmark grid.
 - F7: `HistoryStore` with full-text search, date grouping, auto-expiry; local-only.
 
