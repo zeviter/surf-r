@@ -37,6 +37,7 @@ enum Omnibox {
     /// Heuristic: does this read as a hostname/URL rather than a search phrase?
     private static func looksLikeURL(_ text: String) -> Bool {
         // Searches usually contain spaces; hosts never do.
+        // Searches usually contain spaces; hosts never do.
         guard !text.contains(" ") else { return false }
 
         // localhost (optionally with port/path) is a host.

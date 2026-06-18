@@ -9,6 +9,9 @@ import SwiftUI
 
 @main
 struct SurfrApp: App {
+    /// Drives the bookmark command's title (Bookmark ↔ Remove) from current state.
+    @ObservedObject private var bookmarks = BookmarkState.shared
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -30,11 +33,21 @@ struct SurfrApp: App {
                 }
                 .keyboardShortcut("l", modifiers: .command)
 
+                Button(bookmarks.isActiveBookmarked ? "Remove Bookmark" : "Bookmark Page") {
+                    NotificationCenter.default.post(name: .toggleBookmark, object: nil)
+                }
+                .keyboardShortcut("d", modifiers: .command)
+
                 #if DEBUG
                 Button("Run History Self-Test") {
                     Task { await HistoryStore.shared.runSelfTest() }
                 }
                 .keyboardShortcut("h", modifiers: [.command, .control, .option])
+
+                Button("Run Bookmark Self-Test") {
+                    Task { await BookmarkStore.shared.runSelfTest() }
+                }
+                .keyboardShortcut("b", modifiers: [.command, .control, .option])
                 #endif
             }
         }

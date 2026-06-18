@@ -10,6 +10,8 @@ extension Notification.Name {
     static let newTab = Notification.Name("newTab")
     /// Posted by the ⌘W menu command to close the active tab.
     static let closeTab = Notification.Name("closeTab")
+    /// Posted by the ⌘D menu command to bookmark/unbookmark the active tab's page.
+    static let toggleBookmark = Notification.Name("toggleBookmark")
 }
 
 private let homeURL = URL(string: "https://duckduckgo.com")!
@@ -39,7 +41,7 @@ final class Tab: ObservableObject, Identifiable {
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         #endif
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = WebContentView(frame: .zero, configuration: config)
         self.init(webView: webView, url: url, loadInitialRequest: true)
     }
 
@@ -97,12 +99,14 @@ final class Tab: ObservableObject, Identifiable {
 @MainActor
 final class BrowserState: ObservableObject {
     @Published var tabs: [Tab]
-    @Published var activeTabID: Tab.ID
+    @Published var activeTabID: Tab.ID { didSet { bindActiveURL() } }
 
     /// Gates `window.open` pop-ups (F4) and handles JS dialogs for every tab.
     let popupGate = PopupGate()
     /// Records successful page loads into history (slice 1: data layer only).
     let historyRecorder = HistoryRecorder()
+    /// Tracks the active tab's URL so the bookmark menu/title reflects its state.
+    private var activeURLBinding: AnyCancellable?
 
     init() {
         let first = Tab(url: homeURL)
@@ -110,6 +114,15 @@ final class BrowserState: ObservableObject {
         activeTabID = first.id
         popupGate.browser = self
         wire(first)
+        bindActiveURL()
+    }
+
+    /// Mirror the active tab's current URL into `BookmarkState` (re-subscribing on
+    /// every tab switch), so the bookmark command's title stays correct.
+    private func bindActiveURL() {
+        activeURLBinding = activeTab.$url.sink { url in
+            MainActor.assumeIsolated { BookmarkState.shared.activeURL = url }
+        }
     }
 
     var activeTab: Tab {
@@ -144,7 +157,7 @@ final class BrowserState: ObservableObject {
         #if DEBUG
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
         #endif
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = WebContentView(frame: .zero, configuration: configuration)
         let tab = Tab(adopting: webView, initialURL: initialURL)
         tabs.append(tab)
         activeTabID = tab.id
@@ -170,6 +183,76 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
               let host = url.host, !host.isEmpty else { return }
         let title = webView.title
         Task { await HistoryStore.shared.recordVisit(url: url, title: title) }
+    }
+}
+
+/// `WKWebView` subclass that adds a "Bookmark Page" / "Remove Bookmark" item to
+/// the page's right-click menu — same context menu the DEBUG Inspect Element item
+/// lives in. Bookmarking is a real feature, so this is not DEBUG-gated.
+final class WebContentView: WKWebView {
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        super.willOpenMenu(menu, with: event)
+        MainActor.assumeIsolated {
+            // Only offer bookmarking on real http(s) pages.
+            guard let url = self.url,
+                  let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+                  let host = url.host, !host.isEmpty else { return }
+            let bookmarked = BookmarkState.shared.bookmarkedURLs.contains(url.absoluteString)
+            let item = NSMenuItem(title: bookmarked ? "Remove Bookmark" : "Bookmark Page",
+                                  action: #selector(toggleBookmarkFromMenu),
+                                  keyEquivalent: "")
+            item.target = self
+            menu.insertItem(.separator(), at: 0)
+            menu.insertItem(item, at: 0)
+        }
+    }
+
+    @objc private func toggleBookmarkFromMenu() {
+        MainActor.assumeIsolated {
+            guard let url = self.url else { return }
+            let title = self.title
+            Task { await BookmarkState.shared.toggle(url: url, title: title) }
+        }
+    }
+}
+
+/// In-memory bookmark state for synchronous UI (the bookmark menu title and the
+/// right-click item). Mirrors the persisted set; `BookmarkStore` is the record of
+/// truth. App-layer only — not part of the SurfrCore-ready data layer.
+@MainActor
+final class BookmarkState: ObservableObject {
+    static let shared = BookmarkState()
+
+    /// URLs currently bookmarked — mirror of the store, for synchronous lookups.
+    @Published private(set) var bookmarkedURLs: Set<String> = []
+    /// The active tab's current URL, so the menu title can reflect its state.
+    @Published var activeURL: URL?
+
+    /// Whether the active tab's page is bookmarked (drives the menu item title).
+    var isActiveBookmarked: Bool {
+        guard let activeURL else { return false }
+        return bookmarkedURLs.contains(activeURL.absoluteString)
+    }
+
+    private init() {}
+
+    /// Populate the mirror from the store; call once at launch.
+    func load() async {
+        bookmarkedURLs = Set(await BookmarkStore.shared.all().map(\.url))
+    }
+
+    /// Toggle the bookmark for a page; ignores blank/about:blank/non-web pages.
+    func toggle(url: URL, title: String?) async {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = url.host, !host.isEmpty else { return }
+        let key = url.absoluteString
+        if bookmarkedURLs.contains(key) {
+            await BookmarkStore.shared.removeByURL(url)
+            bookmarkedURLs.remove(key)
+        } else {
+            await BookmarkStore.shared.add(url: url, title: title)
+            bookmarkedURLs.insert(key)
+        }
     }
 }
 
@@ -363,6 +446,21 @@ struct ContentView: View {
                 await HistoryStore.shared.runSelfTest()
             }
             #endif
+        }
+        .task {
+            // Load the bookmark mirror so the menu/right-click reflect state.
+            await BookmarkState.shared.load()
+            #if DEBUG
+            if CommandLine.arguments.contains("--run-bookmark-selftest") {
+                await BookmarkStore.shared.runSelfTest()
+            }
+            #endif
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .toggleBookmark)) { _ in
+            let webView = browser.activeTab.webView
+            guard let url = webView.url else { return }
+            let title = webView.title
+            Task { await BookmarkState.shared.toggle(url: url, title: title) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusOmnibox)) { _ in
             omniboxFocused = true
