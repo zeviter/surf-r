@@ -630,6 +630,8 @@ struct FaviconTile: View {
 /// then the scrolling, host-grouped favicon stack. Replaces the old top tab bar.
 struct RailView: View {
     @ObservedObject var browser: BrowserState
+    /// Host whose tab flyout is currently open (nil = none). UI-only state.
+    @State private var flyoutHost: String?
 
     var body: some View {
         VStack(spacing: 8) {
@@ -663,8 +665,18 @@ struct RailView: View {
                             host: group.host,
                             isActive: group.isActive,
                             tabCount: group.tabCount,
-                            onTap: { browser.activeTabID = group.representativeTabID }
+                            onTap: {
+                                // Single-tab host switches directly; multi-tab opens the flyout.
+                                if group.tabCount >= 2 {
+                                    flyoutHost = group.host
+                                } else {
+                                    browser.activeTabID = group.representativeTabID
+                                }
+                            }
                         )
+                        .popover(isPresented: flyoutBinding(for: group.host), arrowEdge: .trailing) {
+                            TabFlyout(browser: browser, host: group.host) { flyoutHost = nil }
+                        }
                     }
                 }
                 .padding(.vertical, 2)
@@ -674,6 +686,127 @@ struct RailView: View {
         .frame(width: 48)
         .frame(maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: browser.hostGroups.map(\.host)) { _, hosts in
+            // If the flyout's host disappeared (its last tab closed), drop the stale state.
+            if let open = flyoutHost, !hosts.contains(open) { flyoutHost = nil }
+        }
+    }
+
+    /// Presents the flyout for `host` when it's the open one; dismissal clears it.
+    private func flyoutBinding(for host: String) -> Binding<Bool> {
+        Binding(get: { flyoutHost == host }, set: { if !$0 { flyoutHost = nil } })
+    }
+}
+
+/// Per-host tab flyout (ui-wireframes §3): header + live filter + tab rows. Floats
+/// over the page via a popover (no reflow; click-away / Esc dismiss for free).
+struct TabFlyout: View {
+    @ObservedObject var browser: BrowserState
+    let host: String
+    let onSelect: () -> Void
+
+    @State private var filter = ""
+
+    /// This host's tabs, active pinned on top, then most-recently-active.
+    private var hostTabs: [Tab] {
+        browser.tabs
+            .filter { $0.hasNavigated && $0.url.host?.lowercased() == host }
+            .sorted { a, b in
+                if a.id == browser.activeTabID { return true }
+                if b.id == browser.activeTabID { return false }
+                return a.activationOrder > b.activationOrder
+            }
+    }
+
+    private var filteredTabs: [Tab] {
+        let query = filter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return hostTabs }
+        return hostTabs.filter {
+            $0.title.lowercased().contains(query) || $0.url.absoluteString.lowercased().contains(query)
+        }
+    }
+
+    var body: some View {
+        let count = hostTabs.count
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(host) · \(count) tab\(count == 1 ? "" : "s")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            TextField("filter tabs", text: $filter)
+                .textFieldStyle(.roundedBorder)
+            Divider()
+            ScrollView {
+                VStack(spacing: 2) {
+                    ForEach(filteredTabs) { tab in
+                        TabFlyoutRow(
+                            tab: tab,
+                            host: host,
+                            isActive: tab.id == browser.activeTabID,
+                            onSelect: { browser.activeTabID = tab.id; onSelect() },
+                            onClose: { browser.closeTab(tab.id) }
+                        )
+                    }
+                }
+            }
+            .frame(maxHeight: 280)
+        }
+        .padding(10)
+        .frame(width: 280)
+    }
+}
+
+/// One row in the tab flyout: favicon + title (click switches) and an ✕ to close
+/// that specific tab. Observes the tab so the title/URL stay live.
+struct TabFlyoutRow: View {
+    @ObservedObject var tab: Tab
+    let host: String
+    let isActive: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: onSelect) {
+                HStack(spacing: 6) {
+                    rowIcon
+                    Text(tab.title.isEmpty ? tab.url.absoluteString : tab.title)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button(action: onClose) {
+                Image(systemName: "xmark").font(.caption2)
+            }
+            .buttonStyle(.plain)
+            .help("Close tab")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(isActive ? Color.blue.opacity(0.18) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+
+    /// All of a host's tabs share its favicon; fall back to the letter tile.
+    @ViewBuilder private var rowIcon: some View {
+        Group {
+            if let data = FaviconService.shared.cachedFaviconData(forHost: host),
+               let image = NSImage(data: data) {
+                Image(nsImage: image).resizable()
+            } else {
+                ZStack {
+                    FaviconTile.letterColor(for: host)
+                    Text(FaviconTile.letter(for: host))
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+            }
+        }
+        .frame(width: 16, height: 16)
+        .clipShape(RoundedRectangle(cornerRadius: 3))
     }
 }
 
