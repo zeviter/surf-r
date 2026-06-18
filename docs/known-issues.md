@@ -14,3 +14,9 @@ Parked edge cases — documented for transparency, not scheduled for a fix yet.
 | Issue | Current behaviour | Severity | Notes / workaround |
 |---|---|---|---|
 | Cold-start first-paint gap | On a fresh launch the first tab may briefly paint before the content-rule list attaches; subsequent loads/tabs are fully covered. | Low | Deferred to Phase 2b where the blocking flow is reworked. |
+
+## Developer tooling (`Surfr/Surfr/ContentView.swift`)
+
+| Issue | Current behaviour | Severity | Notes / workaround |
+|---|---|---|---|
+| Right-click "Inspect Element" uses private API | The `developerExtrasEnabled` preference is set via KVC in **DEBUG only** (compiled out of release); it's an undocumented WebKit key that may change or break on a future macOS version. | Low — DEBUG tooling only | If it stops working, fall back to Safari's Develop menu (the `isInspectable` path). |

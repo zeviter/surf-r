@@ -29,7 +29,20 @@ final class Tab: ObservableObject, Identifiable {
     init(url: URL) {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()   // ← isolated per tab; no shared cookies/cache
+
+        #if DEBUG
+        // Restore the right-click "Inspect Element" item (opens Web Inspector in-app, no Safari).
+        // Private preference set via KVC so the selector isn't statically linked; DEBUG-only.
+        // Must be set before the web view snapshots its configuration.
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
+
         webView = WKWebView(frame: .zero, configuration: config)
+
+        #if DEBUG
+        // 2d: let Safari's Web Inspector attach to this tab. DEBUG-only — never in release.
+        webView.isInspectable = true
+        #endif
 
         // Apply the ad-blocking content rules to this tab (now or once compiled).
         ContentBlocker.shared.apply(to: webView)
