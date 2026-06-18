@@ -22,7 +22,7 @@ A browser where privacy is the default behaviour. Guiding principles:
 |----|---------|-----------|
 | F1 | IP obfuscation | Per-app proxy via `WKWebsiteDataStore.proxyConfigurations` (iOS 17+/macOS 14+) → SOCKS5 to Tor or self-hosted WireGuard; WebRTC + DNS leak hardening |
 | F2 | No cookies | `WKWebsiteDataStore.nonPersistent()` per tab/session; optional per-domain persistent allowlist |
-| F3 | Block all ads | `WKContentRuleList` compiled from EasyList/EasyPrivacy (split lists; ~150k-rule cap each) + cosmetic CSS via `WKUserScript` |
+| F3 | Block all ads | Fetch filter lists (EasyList/EasyPrivacy) and convert them to WebKit content-blocker JSON at runtime via a maintained converter (AdGuard `SafariConverterLib`) or a reputable pre-converted source — **never** a hand-rolled converter. Compile with `WKContentRuleListStore`; retain the last-good compiled list and fall back to it on any fetch/convert/compile failure; a small bundled seed list ships as the initial last-good fallback. Per-list rule cap is hard-coded (50,000 rules on older OS versions, 150,000 on current); exceed it by splitting into multiple lists each under the cap and applying them all — separate lists are independent (a rule in one cannot undo a block from another). Cosmetic element-hiding via `WKUserScript`. |
 | F4 | Block ad popups, allow trusted | `WKUIDelegate.webView(_:createWebViewWith:…)` gate: allow only user-initiated or allowlisted origins |
 | F5 | Own password manager, cross-device + cross-app | Encrypted vault (CryptoKit + Keychain + Secure Enclave) · CloudKit E2E sync · `ASCredentialProviderExtension` for system-wide autofill + passkeys |
 | F6 | Clean bookmarks on new tab | Local-first `BookmarkStore` (CloudKit-synced) rendered as the New Tab page |
@@ -66,9 +66,14 @@ Each phase must build and run before the next. Commit per slice.
 - Back/forward/reload; loading + TLS indicator.
 
 ### Phase 2 — Blocking (macOS)
-- F3: bundle EasyList/EasyPrivacy, compile to `WKContentRuleList` (split to respect rule cap),
-  apply to all web views; cosmetic element-hiding via `WKUserScript`.
-- F4: implement `WKUIDelegate` popup gate + `TrustPolicy` allowlist.
+- **2a — Pipeline proof.** Bundle a seed list (EasyList, pre-converted to WebKit content-blocker
+  JSON), compile it with `WKContentRuleListStore`, and apply the resulting `WKContentRuleList` to
+  every tab — including newly created tabs. One list, under the cap, no chunking. This is the
+  initial last-good fallback.
+- **2b — Runtime updates + full blocking.** Add runtime fetch + convert (maintained converter), the
+  last-good fallback on any failure, EasyPrivacy, cosmetic element-hiding via `WKUserScript`, and
+  multiple-list chunking to respect the per-list cap.
+- **2c — Popup gate (F4).** Implement the `WKUIDelegate` popup gate + `TrustPolicy` allowlist.
 
 ### Phase 3 — Bookmarks & history (macOS)
 - F6: `BookmarkStore`; New Tab page shows the bookmark grid.
@@ -115,3 +120,12 @@ or protection from on-device malware. State these honestly in any user-facing pr
 Apple Developer enrolment, signing identities/certs, first-time capability prompts (CloudKit,
 AutoFill, Network Extension), and anything requiring payment or accepting Apple's terms. The build
 agent pauses and hands these to the user.
+
+## 8. Decisions
+- **F3 fetch-and-convert at runtime (not bundle-only).** EasyList changes constantly; fetching keeps
+  it current without shipping an app update for every list change.
+- **Maintained converter, never hand-rolled.** Adblock filter syntax evolves; delegating conversion
+  to a maintained converter (AdGuard `SafariConverterLib`) or a reputable pre-converted source avoids
+  chasing syntax changes ourselves.
+- **Bundled seed list.** A small seed list ships in the app so the browser blocks from first launch,
+  before any fetch — and survives fetch/convert/compile failures as the initial last-good fallback.

@@ -31,6 +31,9 @@ final class Tab: ObservableObject, Identifiable {
         config.websiteDataStore = .nonPersistent()   // ← isolated per tab; no shared cookies/cache
         webView = WKWebView(frame: .zero, configuration: config)
 
+        // Apply the ad-blocking content rules to this tab (now or once compiled).
+        ContentBlocker.shared.apply(to: webView)
+
         self.url = url
         self.addressText = url.absoluteString
         self.title = url.host() ?? "New Tab"
@@ -190,6 +193,10 @@ struct ContentView: View {
                 .id(browser.activeTabID)
         }
         .frame(minWidth: 800, minHeight: 600)
+        .task {
+            // Compile the bundled seed ad-block list and apply it to every tab.
+            await ContentBlocker.shared.prepare()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .focusOmnibox)) { _ in
             omniboxFocused = true
         }
