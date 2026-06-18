@@ -24,14 +24,15 @@ Width **48px**, minimal horizontal padding, compact. Top to bottom:
 │ 🕐 │  history       ← persistent: opens full-page history in a NEW tab
 │ +  │  new tab       ← persistent: opens a new tab (same as ⌘T)
 │ ── │  divider
-│ S③ │  favicon       ← host group (most-recently-active host on TOP)
+│ S③ │  favicon       ← host group (creation order, stable — does not reorder on activation)
 │ S② │  favicon
 │ G  │  favicon
 └────┘
 ```
 
 - **History icon** (clock) and **new-tab `+`** are fixed controls pinned at the top, above the divider.
-- Below the divider: the **favicon stack**, one tile per **host group** (see §2). Newest-active host on top.
+- Below the divider: the **favicon stack**, one tile per **host group** (see §2). Ordered by **creation
+  order, stable** (first-opened on top; does not reorder on activation).
 - Each favicon tile ≈ 32px, rounded. Shows the site's favicon; fallback in §4.
 - **Active host** is highlighted with a **blue 2px border** on its favicon tile.
 - **Count badge:** small blue-on-white(ish) number on the favicon's bottom-right corner, shown

@@ -1,5 +1,11 @@
 import Foundation
 
+extension Notification.Name {
+    /// Posted (with `userInfo["host"]`) when a host's favicon has just been cached,
+    /// so a rendered rail tile can swap a letter tile for the real icon in place.
+    static let faviconUpdated = Notification.Name("FaviconUpdated")
+}
+
 /// Resolves and caches site favicons — slice 3 of the rail/spotlight/bookmarks/
 /// history phase. **First-party only**: icons are fetched solely from the site's
 /// own host, never from a third-party/aggregator, and cross-host redirects are not
@@ -151,9 +157,13 @@ final class FaviconService: @unchecked Sendable {
 
     private func store(key: String, data: Data, host: String, source: String) {
         setMemory(key, data)
+        lock.lock(); negativeHosts.remove(key); lock.unlock()   // it has an icon now
         if let dir = cacheDir {
             try? data.write(to: dir.appendingPathComponent(key))
         }
+        // Tell the UI a favicon arrived so a rendered tile can swap in the real
+        // icon (e.g. an icon ingested after the tile already showed a letter tile).
+        NotificationCenter.default.post(name: .faviconUpdated, object: nil, userInfo: ["host": host])
         #if DEBUG
         print("[Favicon] cached \(host) (\(data.count) bytes, source: \(source))")
         #endif

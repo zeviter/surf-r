@@ -27,7 +27,31 @@ final class Tab: ObservableObject, Identifiable {
     @Published var addressText: String
     @Published var url: URL
 
+    /// True once this tab has completed a navigation to a real http(s) page.
+    /// A tab that hasn't navigated and has no typed address text is "pristine".
+    var hasNavigated = false
+    /// Monotonic activation stamp; higher = more recently active (rail ordering).
+    var activationOrder = 0
+
     private var observations: [NSKeyValueObservation] = []
+
+    /// Sentinel URL for a blank/pristine tab that hasn't navigated anywhere.
+    static let blankURL = URL(string: "about:blank")!
+
+    /// A blank, pristine tab: builds an isolated web view but loads nothing, so it
+    /// stays out of the rail until it navigates (see `BrowserState` pristine rule).
+    convenience init() {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+
+        #if DEBUG
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
+
+        let webView = WebContentView(frame: .zero, configuration: config)
+        self.init(webView: webView, url: Self.blankURL, loadInitialRequest: false)
+        self.addressText = ""   // pristine: empty omnibox, no typed text
+    }
 
     /// A normal tab: builds its own isolated web view and loads `url`.
     convenience init(url: URL) {
@@ -76,7 +100,10 @@ final class Tab: ObservableObject, Identifiable {
         })
         observations.append(webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
             MainActor.assumeIsolated {
-                guard let u = webView.url else { return }
+                // Only real http(s) pages update the omnibox/URL; about:blank (a
+                // pristine tab) and host-less schemes are ignored so the tab stays
+                // pristine and the omnibox stays empty.
+                guard let u = webView.url, let host = u.host, !host.isEmpty else { return }
                 self?.url = u
                 self?.addressText = u.absoluteString
             }
@@ -95,11 +122,28 @@ final class Tab: ObservableObject, Identifiable {
     }
 }
 
-/// Holds the open tabs and which one is active.
+/// One host's tile in the rail: its favicon, tab count, and the most-recently
+/// active tab to switch to when clicked (subdomain-aware — see ui-wireframes §2).
+struct HostGroup: Identifiable {
+    let host: String
+    let tabCount: Int
+    let representativeTabID: Tab.ID   // most-recently-active tab in this host
+    let isActive: Bool               // contains the active tab
+    var id: String { host }
+}
+
+/// Holds the open tabs and which one is active, and derives the rail's host groups.
 @MainActor
 final class BrowserState: ObservableObject {
     @Published var tabs: [Tab]
-    @Published var activeTabID: Tab.ID { didSet { bindActiveURL() } }
+    @Published var activeTabID: Tab.ID {
+        didSet {
+            bindActiveURL()
+            handleActiveChange(previous: oldValue)
+        }
+    }
+    /// Host-grouped tiles for the rail, most-recently-active host first.
+    @Published private(set) var hostGroups: [HostGroup] = []
 
     /// Gates `window.open` pop-ups (F4) and handles JS dialogs for every tab.
     let popupGate = PopupGate()
@@ -107,22 +151,26 @@ final class BrowserState: ObservableObject {
     let historyRecorder = HistoryRecorder()
     /// Tracks the active tab's URL so the bookmark menu/title reflects its state.
     private var activeURLBinding: AnyCancellable?
+    /// Per-tab URL subscriptions, so we can react when a pristine tab navigates.
+    private var tabURLBindings: [Tab.ID: AnyCancellable] = [:]
+    /// Monotonic activation counter; assigned to each tab as it becomes active
+    /// (drives the representative tab, NOT the rail's tile order).
+    private var activationCounter = 0
+    /// Stable creation order for the rail: a host's position is fixed when it first
+    /// appears and never changes on activation. Reopened hosts append at the bottom.
+    private var hostCreationOrder: [String: Int] = [:]
+    private var hostCreationCounter = 0
 
     init() {
-        let first = Tab(url: homeURL)
+        let first = Tab()   // blank, pristine
         tabs = [first]
         activeTabID = first.id
         popupGate.browser = self
+        activationCounter = 1
+        first.activationOrder = 1
         wire(first)
         bindActiveURL()
-    }
-
-    /// Mirror the active tab's current URL into `BookmarkState` (re-subscribing on
-    /// every tab switch), so the bookmark command's title stays correct.
-    private func bindActiveURL() {
-        activeURLBinding = activeTab.$url.sink { url in
-            MainActor.assumeIsolated { BookmarkState.shared.activeURL = url }
-        }
+        recomputeHostGroups()
     }
 
     var activeTab: Tab {
@@ -130,23 +178,26 @@ final class BrowserState: ObservableObject {
     }
 
     func newTab() {
-        let tab = Tab(url: homeURL)
+        let tab = Tab()   // blank, pristine
         tabs.append(tab)
-        activeTabID = tab.id
         wire(tab)
+        activeTabID = tab.id   // didSet bumps activation, discards prior pristine, recomputes
     }
 
     /// Close a tab; if it was the last one, keep the window alive with a fresh tab.
     func closeTab(_ id: Tab.ID) {
         guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
         tabs.remove(at: idx)
+        tabURLBindings[id] = nil
         if tabs.isEmpty {
-            let tab = Tab(url: homeURL)
+            let tab = Tab()
             tabs = [tab]
-            activeTabID = tab.id
             wire(tab)
+            activeTabID = tab.id          // didSet recomputes (logs any host removal)
         } else if activeTabID == id {
-            activeTabID = tabs[min(idx, tabs.count - 1)].id
+            activeTabID = tabs[min(idx, tabs.count - 1)].id   // didSet recomputes
+        } else {
+            recomputeHostGroups()         // closed a background tab
         }
     }
 
@@ -160,16 +211,110 @@ final class BrowserState: ObservableObject {
         let webView = WebContentView(frame: .zero, configuration: configuration)
         let tab = Tab(adopting: webView, initialURL: initialURL)
         tabs.append(tab)
+        wire(tab)               // subscription marks it real (it already has a URL)
         activeTabID = tab.id
-        wire(tab)
         return webView
     }
 
-    /// Route a tab's pop-up/dialog callbacks through the shared gate, and its
-    /// navigation events through the history recorder.
+    // MARK: - Rail: grouping, ordering, pristine rule
+
+    /// Mirror the active tab's current URL into `BookmarkState` (re-subscribing on
+    /// every tab switch), so the bookmark command's title stays correct.
+    private func bindActiveURL() {
+        activeURLBinding = activeTab.$url.sink { url in
+            MainActor.assumeIsolated { BookmarkState.shared.activeURL = url }
+        }
+    }
+
+    /// Route a tab's callbacks through the shared gate + history recorder, and
+    /// watch its URL so we notice when a pristine tab first navigates.
     private func wire(_ tab: Tab) {
         tab.webView.uiDelegate = popupGate
         tab.webView.navigationDelegate = historyRecorder
+        tabURLBindings[tab.id] = tab.$url.sink { [weak self, weak tab] _ in
+            MainActor.assumeIsolated {
+                guard let self, let tab else { return }
+                self.handleTabURL(tab)
+            }
+        }
+    }
+
+    /// A tab's URL changed: if it just became real, mark it, warm its favicon, and
+    /// log the join. Always refresh grouping (the host may have changed).
+    private func handleTabURL(_ tab: Tab) {
+        if !tab.hasNavigated, let host = tab.url.host, !host.isEmpty {
+            tab.hasNavigated = true
+            railLog("tab joined host \(host)")
+            FaviconService.shared.prefetch(host: host)
+        }
+        recomputeHostGroups()
+    }
+
+    private func handleActiveChange(previous: Tab.ID) {
+        // Stamp the newly active tab as most-recent.
+        if let active = tabs.first(where: { $0.id == activeTabID }) {
+            activationCounter += 1
+            active.activationOrder = activationCounter
+        }
+        // Discard the tab we just left if it's an untouched pristine tab.
+        if previous != activeTabID,
+           let prev = tabs.first(where: { $0.id == previous }), isPristine(prev) {
+            discard(prev)
+        }
+        recomputeHostGroups()
+    }
+
+    /// Pristine = never navigated AND no typed-but-uncommitted address text. A tab
+    /// with typed text is NOT pristine and is never discarded (text preserved).
+    private func isPristine(_ tab: Tab) -> Bool {
+        !tab.hasNavigated && tab.addressText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func discard(_ tab: Tab) {
+        tabs.removeAll { $0.id == tab.id }
+        tabURLBindings[tab.id] = nil
+        railLog("pristine tab discarded")
+    }
+
+    /// Group real (navigated) tabs by full host; one tile per host, in stable
+    /// **creation order** (first-opened on top; never reorders on activation).
+    /// Logs any host group that disappeared.
+    private func recomputeHostGroups() {
+        var byHost: [String: [Tab]] = [:]
+        for tab in tabs where tab.hasNavigated {
+            guard let host = tab.url.host?.lowercased(), !host.isEmpty else { continue }
+            byHost[host, default: []].append(tab)
+        }
+        // Fix each host's strip position the first time it appears.
+        for host in byHost.keys.sorted() where hostCreationOrder[host] == nil {
+            hostCreationCounter += 1
+            hostCreationOrder[host] = hostCreationCounter
+        }
+        var groups = byHost.map { host, hostTabs -> HostGroup in
+            // Representative tab (for click-to-switch) is still the most-recent.
+            let representative = hostTabs.max { $0.activationOrder < $1.activationOrder }!
+            return HostGroup(
+                host: host,
+                tabCount: hostTabs.count,
+                representativeTabID: representative.id,
+                isActive: hostTabs.contains { $0.id == activeTabID }
+            )
+        }
+        groups.sort { (hostCreationOrder[$0.host] ?? 0) < (hostCreationOrder[$1.host] ?? 0) }
+
+        let removed = Set(hostGroups.map(\.host)).subtracting(groups.map(\.host))
+        for host in removed {
+            hostCreationOrder[host] = nil   // reopened later → fresh slot at the bottom
+            railLog("host group removed \(host)")
+        }
+
+        hostGroups = groups
+    }
+
+    private func railLog(_ message: String) {
+        #if DEBUG
+        print("[Rail] \(message)")
+        #endif
     }
 }
 
@@ -387,55 +532,148 @@ struct OmniboxBar: View {
     }
 }
 
-/// A single entry in the tab bar: title + close button, click to activate.
-struct TabButton: View {
-    @ObservedObject var tab: Tab
+/// One host tile in the rail: favicon (or letter-tile fallback), active highlight,
+/// and a count badge when the host has ≥2 tabs. Clicking switches to the host's
+/// most-recently-active tab.
+struct FaviconTile: View {
+    let host: String
     let isActive: Bool
-    let select: () -> Void
-    let close: () -> Void
+    let tabCount: Int
+    let onTap: () -> Void
+
+    @State private var iconData: Data?
+
+    private static let size: CGFloat = 32        // tile cell (unchanged)
+    private static let iconSize: CGFloat = 20    // favicon/letter inset inside the tile
+    private static let iconRadius: CGFloat = 5
+    private static let ringSize: CGFloat = 26    // active highlight ring (around the icon)
+    private static let ringRadius: CGFloat = 7
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text(tab.title)
-                .lineLimit(1)
-                .frame(maxWidth: 160, alignment: .leading)
-            Button(action: close) {
-                Image(systemName: "xmark")
-                    .font(.caption2)
+        ZStack(alignment: .bottomTrailing) {
+            ZStack {
+                // Favicon (or letter), inset and clipped so the border never touches it.
+                iconContent
+                    .frame(width: Self.iconSize, height: Self.iconSize)
+                    .clipShape(RoundedRectangle(cornerRadius: Self.iconRadius))
+                // Active highlight: a ring around the icon with clear breathing room.
+                RoundedRectangle(cornerRadius: Self.ringRadius)
+                    .strokeBorder(Color.blue, lineWidth: 2)
+                    .frame(width: Self.ringSize, height: Self.ringSize)
+                    .opacity(isActive ? 1 : 0)
             }
-            .buttonStyle(.plain)
+            .frame(width: Self.size, height: Self.size)
+
+            if tabCount >= 2 {
+                Text(tabCount > 99 ? "99+" : "\(tabCount)")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.blue))
+                    .offset(x: 3, y: 3)
+            }
         }
-        .padding(.horizontal, 10)
-        .frame(maxHeight: .infinity)
-        .background(isActive ? Color(nsColor: .selectedControlColor) : Color.clear)
+        .frame(width: 40, height: 40)
         .contentShape(Rectangle())
-        .onTapGesture(perform: select)
+        .onTapGesture(perform: onTap)
+        .help(host)
+        .task(id: host) { await loadIcon() }
+        .onReceive(NotificationCenter.default.publisher(for: .faviconUpdated).receive(on: RunLoop.main)) { note in
+            // A favicon was cached after this tile rendered — swap it in, this tile only.
+            guard (note.userInfo?["host"] as? String)?.lowercased() == host.lowercased() else { return }
+            if let data = FaviconService.shared.cachedFaviconData(forHost: host) {
+                iconData = data
+            }
+        }
+    }
+
+    /// Real favicon if we have usable raster bytes, else the letter-tile fallback.
+    /// Sized/clipped by the caller so both look consistent inside the tile.
+    @ViewBuilder private var iconContent: some View {
+        if let data = iconData ?? FaviconService.shared.cachedFaviconData(forHost: host),
+           let image = NSImage(data: data) {
+            Image(nsImage: image).resizable().scaledToFill()
+        } else {
+            ZStack {
+                Self.letterColor(for: host)
+                Text(Self.letter(for: host))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+        }
+    }
+
+    private func loadIcon() async {
+        if let cached = FaviconService.shared.cachedFaviconData(forHost: host) {
+            iconData = cached
+            return
+        }
+        iconData = await FaviconService.shared.favicon(forHost: host)
+    }
+
+    /// First letter of the primary domain label (admin.shopify.com → "S").
+    static func letter(for host: String) -> String {
+        let labels = host.split(separator: ".")
+        let primary = labels.count >= 2 ? labels[labels.count - 2] : (labels.first ?? Substring(host))
+        return primary.first.map { String($0).uppercased() } ?? "?"
+    }
+
+    /// Stable per-host tile colour from the service's colour seed.
+    static func letterColor(for host: String) -> Color {
+        let seed = FaviconService.shared.colorSeed(forHost: host)
+        return Color(hue: Double(seed % 360) / 360.0, saturation: 0.55, brightness: 0.75)
     }
 }
 
-struct TabBar: View {
+/// The 48px left rail (ui-wireframes §1): history + new-tab pinned at the top,
+/// then the scrolling, host-grouped favicon stack. Replaces the old top tab bar.
+struct RailView: View {
     @ObservedObject var browser: BrowserState
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 0) {
-                ForEach(browser.tabs) { tab in
-                    TabButton(
-                        tab: tab,
-                        isActive: tab.id == browser.activeTabID,
-                        select: { browser.activeTabID = tab.id },
-                        close: { browser.closeTab(tab.id) }
-                    )
-                    Divider()
+        VStack(spacing: 8) {
+            // History — placeholder this slice; the full-page history view is later.
+            Button {
+                // TODO(history-view slice): open the full-page history view in a NEW tab.
+            } label: {
+                Image(systemName: "clock")
+                    .font(.system(size: 16))
+                    .frame(width: 32, height: 28)
+            }
+            .buttonStyle(.plain)
+            .help("History (not wired up yet)")
+
+            // New tab — same behaviour as ⌘T.
+            Button(action: browser.newTab) {
+                Image(systemName: "plus")
+                    .font(.system(size: 16))
+                    .frame(width: 32, height: 28)
+            }
+            .buttonStyle(.plain)
+            .help("New Tab (⌘T)")
+
+            Divider().frame(width: 30)
+
+            // Favicon stack — one tile per host, scrolls if it overflows.
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 8) {
+                    ForEach(browser.hostGroups) { group in
+                        FaviconTile(
+                            host: group.host,
+                            isActive: group.isActive,
+                            tabCount: group.tabCount,
+                            onTap: { browser.activeTabID = group.representativeTabID }
+                        )
+                    }
                 }
-                Button(action: browser.newTab) {
-                    Image(systemName: "plus")
-                        .padding(.horizontal, 8)
-                }
-                .buttonStyle(.plain)
+                .padding(.vertical, 2)
             }
         }
-        .frame(height: 30)
+        .padding(.vertical, 8)
+        .frame(width: 48)
+        .frame(maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
@@ -444,13 +682,15 @@ struct ContentView: View {
     @FocusState private var omniboxFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            TabBar(browser: browser)
+        HStack(spacing: 0) {
+            RailView(browser: browser)
             Divider()
-            OmniboxBar(tab: browser.activeTab, focused: $omniboxFocused)
-            Divider()
-            WebView(webView: browser.activeTab.webView)
-                .id(browser.activeTabID)
+            VStack(spacing: 0) {
+                OmniboxBar(tab: browser.activeTab, focused: $omniboxFocused)
+                Divider()
+                WebView(webView: browser.activeTab.webView)
+                    .id(browser.activeTabID)
+            }
         }
         .frame(minWidth: 800, minHeight: 600)
         .task {
