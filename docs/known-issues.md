@@ -20,3 +20,9 @@ Parked edge cases — documented for transparency, not scheduled for a fix yet.
 | Issue | Current behaviour | Severity | Notes / workaround |
 |---|---|---|---|
 | Right-click "Inspect Element" uses private API | The `developerExtrasEnabled` preference is set via KVC in **DEBUG only** (compiled out of release); it's an undocumented WebKit key that may change or break on a future macOS version. | Low — DEBUG tooling only | If it stops working, fall back to Safari's Develop menu (the `isInspectable` path). |
+
+## Pop-up gate (`Surfr/Surfr/ContentView.swift`)
+
+| Issue | Current behaviour | Severity | Notes / workaround |
+|---|---|---|---|
+| No "Pop-up blocked" recovery UI | Blocked pop-ups are logged to the console only; there's no transient banner with an "Open" action to recover a wrongly-blocked pop-up. | Low — follow-up | Deferred from Phase 2c to keep the slice focused. Recover by adding the origin to `TrustPolicy`, or re-trigger via a real link. Follow-up: add a transient indicator wired from `PopupGate` into the UI. |

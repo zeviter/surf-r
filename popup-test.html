@@ -1,0 +1,5 @@
+<h1>Popup gate test</h1>
+<a href="https://example.com" target="_blank">Legit link (should open a new tab)</a>
+<br><br>
+<button onclick="window.open('https://example.com')">Programmatic open (should be blocked)</button>
+<script>window.open('https://example.com/auto'); // runs on load → blocked + logged</script>

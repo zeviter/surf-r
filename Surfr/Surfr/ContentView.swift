@@ -1,6 +1,7 @@
 import SwiftUI
 import WebKit
 import Combine
+import AppKit
 
 extension Notification.Name {
     /// Posted by the ⌘L menu command to focus the address bar.
@@ -26,7 +27,8 @@ final class Tab: ObservableObject, Identifiable {
 
     private var observations: [NSKeyValueObservation] = []
 
-    init(url: URL) {
+    /// A normal tab: builds its own isolated web view and loads `url`.
+    convenience init(url: URL) {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()   // ← isolated per tab; no shared cookies/cache
 
@@ -37,7 +39,18 @@ final class Tab: ObservableObject, Identifiable {
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         #endif
 
-        webView = WKWebView(frame: .zero, configuration: config)
+        let webView = WKWebView(frame: .zero, configuration: config)
+        self.init(webView: webView, url: url, loadInitialRequest: true)
+    }
+
+    /// A pop-up tab: adopts the web view WebKit created for an allowed `window.open`.
+    /// WebKit drives the initial load itself, so we must not call `load`.
+    convenience init(adopting webView: WKWebView, initialURL: URL?) {
+        self.init(webView: webView, url: initialURL ?? homeURL, loadInitialRequest: false)
+    }
+
+    private init(webView: WKWebView, url: URL, loadInitialRequest: Bool) {
+        self.webView = webView
 
         #if DEBUG
         // 2d: let Safari's Web Inspector attach to this tab. DEBUG-only — never in release.
@@ -67,7 +80,9 @@ final class Tab: ObservableObject, Identifiable {
             }
         })
 
-        webView.load(URLRequest(url: url))
+        if loadInitialRequest {
+            webView.load(URLRequest(url: url))
+        }
     }
 
     /// Load a parsed URL in this tab.
@@ -84,10 +99,15 @@ final class BrowserState: ObservableObject {
     @Published var tabs: [Tab]
     @Published var activeTabID: Tab.ID
 
+    /// Gates `window.open` pop-ups (F4) and handles JS dialogs for every tab.
+    let popupGate = PopupGate()
+
     init() {
         let first = Tab(url: homeURL)
         tabs = [first]
         activeTabID = first.id
+        popupGate.browser = self
+        wire(first)
     }
 
     var activeTab: Tab {
@@ -98,6 +118,7 @@ final class BrowserState: ObservableObject {
         let tab = Tab(url: homeURL)
         tabs.append(tab)
         activeTabID = tab.id
+        wire(tab)
     }
 
     /// Close a tab; if it was the last one, keep the window alive with a fresh tab.
@@ -108,8 +129,113 @@ final class BrowserState: ObservableObject {
             let tab = Tab(url: homeURL)
             tabs = [tab]
             activeTabID = tab.id
+            wire(tab)
         } else if activeTabID == id {
             activeTabID = tabs[min(idx, tabs.count - 1)].id
+        }
+    }
+
+    /// Adopt an allowed pop-up as a new tab with its own isolated ephemeral store.
+    /// Called by `PopupGate` from `createWebViewWith`; WebKit then drives its load.
+    func adoptPopup(configuration: WKWebViewConfiguration, initialURL: URL?) -> WKWebView {
+        configuration.websiteDataStore = .nonPersistent()   // isolate like every other tab
+        #if DEBUG
+        configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let tab = Tab(adopting: webView, initialURL: initialURL)
+        tabs.append(tab)
+        activeTabID = tab.id
+        wire(tab)
+        return webView
+    }
+
+    /// Route a tab's pop-up/dialog callbacks through the shared gate.
+    private func wire(_ tab: Tab) {
+        tab.webView.uiDelegate = popupGate
+    }
+}
+
+/// Minimal origin allowlist for pop-ups (F4). Starts empty — a pop-up is allowed
+/// only when user-initiated, unless its origin is explicitly trusted here.
+final class TrustPolicy {
+    private var allowedHosts: Set<String> = []
+
+    func allow(host: String) { allowedHosts.insert(host.lowercased()) }
+
+    func allows(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased() else { return false }
+        return allowedHosts.contains(host)
+    }
+}
+
+/// `WKUIDelegate` shared by every tab. Gates `window.open`: a new tab opens only
+/// for user-initiated link activations or trusted origins; programmatic pop-ups
+/// and pop-unders are blocked (return `nil`) and logged. Also forwards native
+/// alert/confirm/prompt so installing this delegate doesn't disable JS dialogs.
+final class PopupGate: NSObject, WKUIDelegate {
+    weak var browser: BrowserState?
+    let trustPolicy = TrustPolicy()
+
+    func webView(_ webView: WKWebView,
+                 createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction,
+                 windowFeatures: WKWindowFeatures) -> WKWebView? {
+        // This callback arrives on the main thread.
+        MainActor.assumeIsolated {
+            let target = navigationAction.request.url
+            let userInitiated = navigationAction.navigationType == .linkActivated
+            let trusted = target.map(trustPolicy.allows) ?? false
+
+            guard userInitiated || trusted else {
+                print("[PopupGate] blocked pop-up: \(target?.absoluteString ?? "about:blank") — "
+                    + "programmatic window.open (not a user link activation)")
+                return nil
+            }
+            return browser?.adoptPopup(configuration: configuration, initialURL: target)
+        }
+    }
+
+    // MARK: JS dialog passthrough — keep alert/confirm/prompt working
+
+    func webView(_ webView: WKWebView,
+                 runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+        completionHandler()
+    }
+
+    func webView(_ webView: WKWebView,
+                 runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (Bool) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        completionHandler(alert.runModal() == .alertFirstButtonReturn)
+    }
+
+    func webView(_ webView: WKWebView,
+                 runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (String?) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = prompt
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.stringValue = defaultText ?? ""
+        alert.accessoryView = field
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            completionHandler(field.stringValue)
+        } else {
+            completionHandler(nil)
         }
     }
 }
