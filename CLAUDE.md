@@ -23,14 +23,29 @@ macOS app · iOS app · AutoFill credential-provider extension (per platform) ·
 extension · optional network/proxy extension · CloudKit-backed sync. Engine is **WebKit** on both
 platforms (no Chromium/Gecko — Apple requires WebKit for third-party browsers outside the EU).
 
-## Current phase
-**Phase 0 — macOS-first MVP.** One vertical slice: a `WKWebView` window using
-`WKWebsiteDataStore.nonPersistent()` (no cookies on disk) that loads a URL. Do not scaffold all
-targets yet; grow the core out of working code. See `docs/spec.md` §Build order.
+## Current state
+The macOS app is well past MVP: rail with host-grouped tabs + flyout, summon-only spotlight omnibox,
+bookmarks-on-new-tab, full-page History/Trusted-Sites/Shortcuts/Downloads surfaces, ad/tracker/
+cookie-consent blocking, pop-up gate, HTTPS-only, tracking-param stripping, persistent download
+history, and the hybrid trust model. See `docs/spec.md` (reality-first; §6 maps phases to
+DONE/REMAINING) and `docs/backlog.md`. **Remaining major work:** IP routing (F1), password vault +
+autofill (F5), CloudKit sync, `SurfrCore` extraction + iOS target, anti-adblock, anti-fingerprinting.
+Still single-target macOS; data layers are written import-clean for the future `SurfrCore` move.
+
+## Core architecture — the hybrid trust model
+Any navigation- or data-touching change **must respect the hybrid trust model** (`docs/spec.md` §4,
+`Trust.swift`): tabs are ephemeral and isolated (`WKWebsiteDataStore.nonPersistent()`) by default;
+**trusted registrable domains** share the single persistent `WKWebsiteDataStore.default()` so logins
+persist. The store is bound at web-view creation and rebound on trust-boundary crossings in the
+navigation delegate (with a redirect-chain guard). **HTTP can never be trusted/persisted** — insecure
+pages stay ephemeral. Don't bypass this (e.g. don't load trusted content in an ephemeral view or vice
+versa) without updating the model.
 
 ## Engineering guardrails
 - **Build in vertical slices.** Each slice should run and be testable in the Simulator / on the Mac
   before moving on. Prefer small, reviewable commits.
+- **Work directly on `main`.** Commit straight to `main`; do **not** create feature/work branches
+  unless the user explicitly asks. (This overrides any generic "branch first" default.)
 - **Privacy is the product.** Never add telemetry, analytics, crash-phone-home, or any code that
   exfiltrates user data or browsing activity. Default to the most private option.
 - **Crypto: do not roll your own.** The password vault uses CryptoKit (AES-GCM/ChaChaPoly), the

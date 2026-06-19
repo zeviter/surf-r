@@ -1,161 +1,271 @@
 # spec.md — surf-r build specification
 
-> Authoritative build spec, referenced by `CLAUDE.md`. Privacy-first browser for macOS + iOS,
-> Swift + WebKit. Verify Apple framework APIs against current docs before relying on snippets.
+> Authoritative build spec, referenced by `CLAUDE.md`. Privacy-first browser for macOS (+ a planned
+> iOS target), Swift + WebKit. Verify Apple framework APIs against current docs before relying on
+> snippets.
+>
+> **This document is reality-first:** §2–§5 describe what is actually built today; §6 maps the
+> original phased plan to DONE / REMAINING. `docs/ui-wireframes.md` remains authoritative for rail /
+> spotlight / bookmarks / history / surfaces UI; `docs/backlog.md` tracks outstanding work;
+> `docs/known-issues.md` tracks parked bugs/limitations.
 
 ---
 
 ## 1. Goal & principles
 
 A browser where privacy is the default behaviour. Guiding principles:
-- **Ephemeral by default** — nothing persisted unless the user opts in per-site.
-- **WebKit engine** on both platforms (`WKWebView`). No Chromium/Gecko (Apple requires WebKit for
-  third-party browsers outside the EU; acceptable for every feature here).
-- **No telemetry, ever.** The product earns trust by collecting nothing.
-- **User owns the stack** — self-hosted IP routing, self-owned password vault, device-bound keys.
+- **Private by default, persistent only on explicit trust.** Each tab uses an isolated
+  `WKWebsiteDataStore.nonPersistent()` store (no cookies on disk). The user can *trust* a site, which
+  moves it to a single shared persistent store so logins/SSO survive relaunch (the **hybrid trust
+  model**, §4). Nothing else is persisted to a site's benefit.
+- **WebKit engine** (`WKWebView`). No Chromium/Gecko (Apple requires WebKit for third-party browsers
+  outside the EU; acceptable for every feature here).
+- **No telemetry, ever.** The product earns trust by collecting nothing. History is local-only.
+- **User owns the stack** — self-hosted IP routing and a self-owned password vault are intended
+  (not yet built, §6).
 
 ---
 
-## 2. Feature requirements → mechanism
+## 2. Feature requirements → mechanism (with build status)
 
-| ID | Feature | Mechanism |
-|----|---------|-----------|
-| F1 | IP obfuscation | Per-app proxy via `WKWebsiteDataStore.proxyConfigurations` (iOS 17+/macOS 14+) → SOCKS5 to Tor or self-hosted WireGuard; WebRTC + DNS leak hardening |
-| F2 | No cookies | `WKWebsiteDataStore.nonPersistent()` per tab/session; optional per-domain persistent allowlist |
-| F3 | Block all ads | Fetch filter lists (EasyList/EasyPrivacy) and convert them to WebKit content-blocker JSON at runtime via a maintained converter (AdGuard `SafariConverterLib`) or a reputable pre-converted source — **never** a hand-rolled converter. Compile with `WKContentRuleListStore`; retain the last-good compiled list and fall back to it on any fetch/convert/compile failure; a small bundled seed list ships as the initial last-good fallback. Per-list rule cap is hard-coded (50,000 rules on older OS versions, 150,000 on current); exceed it by splitting into multiple lists each under the cap and applying them all — separate lists are independent (a rule in one cannot undo a block from another). Cosmetic element-hiding via `WKUserScript`. |
-| F4 | Block ad popups, allow trusted | `WKUIDelegate.webView(_:createWebViewWith:…)` gate: allow only user-initiated or allowlisted origins |
-| F5 | Own password manager, cross-device + cross-app | Encrypted vault (CryptoKit + Keychain + Secure Enclave) · CloudKit E2E sync · `ASCredentialProviderExtension` for system-wide autofill + passkeys |
-| F6 | Clean bookmarks on new tab | Local-first `BookmarkStore` (CloudKit-synced) rendered as the New Tab page |
-| F7 | Organised history | Indexed, searchable, date-grouped store; **local-only by default**; auto-expiry |
-| F8 | Omnibox shortcut | Global `UIKeyCommand` (iOS) / `NSMenu` (macOS) → input parser (URL vs search) → opens in new tab |
+Status: ✓ done · ◐ partial · ☐ not started.
 
----
+| ID | Feature | Status | Mechanism (as built, or planned) |
+|----|---------|--------|-----------|
+| F2 | No cookies by default + per-site persistence | ✓ | Per-tab `nonPersistent()` store; trusted registrable domains share `WKWebsiteDataStore.default()`. The hybrid trust model — §4. (`Trust.swift`, store binding in `ContentView.swift`.) |
+| F3 | Block ads / trackers / cookie banners | ✓ | EasyList + EasyPrivacy + EasyList-Cookie, each fetched and converted on-device with AdGuard `SafariConverterLib`, compiled into its **own** `WKContentRuleList` and applied together. Bundled seed + on-disk cache as last-good fallback; background refresh; cold-start first-paint gate. Basic cosmetic hiding (`css-display-none`) comes from the converter. (`ContentBlocker.swift`.) Advanced cosmetic (scriptlets/`:has()`) is ☐ (backlog). |
+| F4 | Block ad pop-ups, allow trusted | ✓ | `WKUIDelegate` gate: allow only user-initiated link activations or allowlisted origins; programmatic `window.open` blocked. (`PopupGate` / `TrustPolicy` in `ContentView.swift`.) |
+| F6 | Clean bookmarks on new tab | ✓ | Local-first GRDB `BookmarkStore`; the new-tab page shows the omnibox box + a bookmarks grid. (`BookmarkStore.swift`, `Spotlight.swift`.) CloudKit sync is ☐. |
+| F7 | Organised history | ✓ | GRDB `HistoryStore` (indexed, substring search, date-grouped, 365-day auto-prune, local-only); full-page history surface. (`HistoryStore.swift`, `HistoryView.swift`.) |
+| F8 | Omnibox shortcut | ✓ | `⌘L` summons the spotlight overlay (or focuses the permanent new-tab box); URL-vs-DuckDuckGo parser; `Enter` = current tab, `⌘Enter` = new tab. (`Spotlight.swift`, `Omnibox.swift`.) |
+| F1 | IP obfuscation / routing | ☐ | Planned: per-app `WKWebsiteDataStore.proxyConfigurations` → SOCKS5 (Tor / self-hosted WireGuard) + WebRTC/DNS leak hardening. Not started. |
+| F5 | Password manager (vault + system autofill) | ☐ | Planned: CryptoKit/Keychain/Secure-Enclave vault, `ASCredentialProviderExtension`, passkeys. Not started. |
 
-## 3. Architecture (target state)
-
-```
-            ┌──────────── SurfrCore (Swift package) ────────────┐
-            │ TabEngine · ProxyManager · ContentBlockerCompiler │
-            │ VaultCrypto · SyncEngine · History/BookmarkStore  │
-            │ OmniboxParser · TrustPolicy                        │
-            └───▲───────────────▲────────────────────▲──────────┘
-        ┌───────┴──┐      ┌──────┴───────┐     ┌──────┴───────────┐
-        │ macOS app│      │  iOS app     │     │ Extensions:      │
-        │ (SwiftUI)│      │ (SwiftUI)    │     │ AutoFill ×2 ·    │
-        │ WKWebView│      │ WKWebView    │     │ Content Blocker ·│
-        └──────────┘      └──────────────┘     │ Proxy/Network    │
-                                               └──────────────────┘
-```
-Targets are added incrementally (see Build order), not all at once.
+Privacy/UX features built **beyond** the original F-list (all ✓):
+- **HTTPS-only by default** with interstitial + explicit per-site override and visible insecure
+  indicators (`HTTPSUpgrade.swift`, ATS web-content exemption in `Surfr/Info.plist`).
+- **URL tracking-parameter stripping** (`utm_*`, `fbclid`, `gclid`, …), scoped to user-initiated GET
+  navigations only (`TrackingParams.swift`).
+- **Safari User-Agent** so sites don't flag an embedded browser (`Tab.safariUserAgentToken`).
+- **Persistent download history** with interrupted-on-quit handling (`DownloadStore.swift`,
+  `Downloads.swift`, `DownloadsUI.swift`).
+- **Central, override-ready keyboard-shortcut registry** with an editable shortcuts page
+  (`Shortcuts.swift`, `ShortcutsView.swift`).
+- **Web Inspector** attachable in DEBUG builds only (`isInspectable` + `developerExtrasEnabled`).
 
 ---
 
-## 4. Build order (phased)
+## 3. As-built UI & behaviour (macOS)
 
-Each phase must build and run before the next. Commit per slice.
+Near-chromeless; the only persistent chrome is a **48px left rail**. (`docs/ui-wireframes.md` is the
+authoritative layout reference.)
 
-### Phase 0 — macOS MVP  ← current
-- New macOS SwiftUI app `Surfr`, deployment target macOS 14.
-- A `WKWebView` wrapped for SwiftUI (`NSViewRepresentable`) using `.nonPersistent()` data store.
-- Loads a hardcoded URL in a window.
-- **Done:** a cookie-less window renders a live page.
+- **Left rail.** Pinned internal-surface icons (history · downloads · trusted · shortcuts · new-tab),
+  drag-reorderable with a persisted order, each turning green when its surface is the active tab.
+  Below a divider: **host-grouped favicon tabs** — one tile per full host (subdomain-aware), stable
+  creation order, blue active ring, a blue count badge (`99+` cap) when a host has ≥2 tabs, and a
+  top-right status badge (green ✓ trusted / amber ⚠ insecure). First-party favicons via
+  `FaviconService` with a letter-tile fallback. (`ContentView.swift`, `FaviconService.swift`.)
+- **Tab flyout.** Clicking a multi-tab host opens an overlay listing that host's tabs (filter input,
+  active-on-top, per-row close); single-tab hosts switch directly. Pristine (un-navigated) tabs are
+  disposable.
+- **Spotlight omnibox.** Summon-only via `⌘L`: a centered overlay over a dimmed page (pre-filled +
+  selected current URL), or focus of the permanent box on the new-tab page. Ranked suggestions
+  (recent history → bookmarks → DuckDuckGo) blending match quality + visit frequency. (`Spotlight.swift`.)
+- **New-tab page.** Permanent omnibox box + responsive bookmarks grid (favicon + label; `⌘D` /
+  right-click to add; ⌘-click a tile opens in a new tab).
+- **Full-page internal surfaces** built on a shared `PageScaffold` (header + live search + grouped
+  list + reusable row): **History**, **Trusted Sites**, **Keyboard Shortcuts**, **Downloads**
+  (the downloads rail icon also keeps a popover with live progress + "See all"). (`PageScaffold.swift`,
+  `HistoryView.swift`, `TrustedSitesView.swift`, `ShortcutsView.swift`, `DownloadsUI.swift`.)
+- **Ephemeral internal-surface rule.** Each internal surface (and the new-tab page) is
+  single-instance: opening one switches to it if already open, and it auto-closes when it stops being
+  the active tab — never left as a stray tab. (`BrowserState` in `ContentView.swift`.)
+- **Navigation.** Back/forward via `⌘←`/`⌘→` (primary, editable) **and** `⌘[`/`⌘]` (hard-wired
+  aliases), plus two-finger swipe and mouse side-buttons. Reload `⌘R`, hard reload `⌘⇧R`, empty-cache
+  reload `⌘⌥R`. Window title mirrors the active tab's page title, with `· Trusted: <Domain>` or
+  `· ⚠ Not Secure` appended.
+- **Keyboard shortcuts** are resolved through the registry's effective binding (override ?? default)
+  everywhere — menu bar and key handlers never hardcode keys — so edits take effect live and persist.
+  The shortcuts page allows recording new combos with conflict + reserved-key detection and reset.
 
-### Phase 1 — Navigation shell (macOS)
-- Omnibox (F8): `⌘L` focuses an address field; parser decides URL vs DuckDuckGo search; opens result.
-- Multiple tabs (F-core): tab model in `SurfrCore`, tab bar UI, each tab its own ephemeral store.
-- Back/forward/reload; loading + TLS indicator.
+---
 
-### Phase 2 — Blocking (macOS)
-- **2a — Pipeline proof.** Bundle a seed list (EasyList, pre-converted to WebKit content-blocker
-  JSON), compile it with `WKContentRuleListStore`, and apply the resulting `WKContentRuleList` to
-  every tab — including newly created tabs. One list, under the cap, no chunking. This is the
-  initial last-good fallback.
-- **2b — Runtime updates + full blocking.** Add runtime fetch + convert (maintained converter), the
-  last-good fallback on any failure, EasyPrivacy, cosmetic element-hiding via `WKUserScript`, and
-  multiple-list chunking to respect the per-list cap.
-- **2c — Popup gate (F4).** Implement the `WKUIDelegate` popup gate + `TrustPolicy` allowlist.
-- **2d — Web Inspector (DEBUG).** Set `WKWebView.isInspectable = true` in **DEBUG builds only** so
-  Safari's Web Inspector (Develop ▸ Surfr) can attach to a web view to watch network requests and
-  the DOM. A development tool — **never shipped enabled** — and the instrument used for all
-  subsequent network / cosmetic / anti-adblock debugging.
+## 4. Hybrid trust model (core architecture)
+
+Any navigation- or data-touching work **must respect this model.**
+
+- **Default = ephemeral & isolated.** Every tab's web view is created with its own
+  `WKWebsiteDataStore.nonPersistent()` store. Untrusted sites leave nothing on disk and don't share
+  state across tabs.
+- **Trusted = shared persistent store.** A user can trust a site (`⌘⇧T` / menu / Trusted Sites page).
+  Trust is keyed by **registrable domain** (eTLD+1 via `swift-psl`'s `PublicSuffixList`, subdomain-
+  spanning so `accounts.google.com` and `mail.google.com` share `google.com`). Trusted domains use the
+  single shared `WKWebsiteDataStore.default()`, so logins/SSO persist across relaunch and across
+  trusted tabs. The trusted set persists in UserDefaults (domain → trusted-on date).
+- **Store binding & rebinding.** A web view's store is fixed at creation, so the store is chosen from
+  the destination host's trust at first navigation, and the web view is **recreated on the correct
+  store** when a navigation crosses a trust boundary — handled in the navigation delegate's
+  `decidePolicyFor navigationAction`. A redirect-chain guard avoids rebinding mid-OAuth (the store is
+  bound at chain start; a genuine mismatch is reconciled once the chain settles).
+- **HTTP can never be trusted/persisted.** Only HTTPS origins can enter the persistent store; an
+  insecure http page (only reachable via explicit "continue insecurely", §5) is forced to the
+  ephemeral store even on an otherwise-trusted domain. Attempting to trust an http page shows a
+  warning toast and does nothing.
+- **Indicators.** Green ✓ badge on rail/bookmark tiles for trusted hosts; amber ⚠ badge + `· ⚠ Not
+  Secure` title for insecure pages (mutually exclusive); a trust/untrust confirmation toast; a
+  blocked-trust warning toast. Untrusting a domain clears its persisted data.
+
+Source: `Trust.swift` (store + matching + PSL), `TrustUI.swift` (badges + toast), store binding /
+rebind / indicators in `ContentView.swift`.
+
+---
+
+## 5. Privacy mechanisms (as built)
+
+- **Content blocking (F3).** Three independent `WKContentRuleList`s (EasyList ≈63k, EasyPrivacy ≈55k,
+  EasyList-Cookie ≈9k rules) — each well under the 150k per-list cap, so no chunking is needed yet
+  (the split-into-multiple-lists approach is available if any single list grows past the cap). Each
+  source: bundled seed → on-disk cache → runtime fetch+convert, with last-good fallback on any
+  failure; cosmetic `css-display-none` rules come from the converter (`advancedBlocking: false`).
+  Background refresh on app-foreground + a 6h timer. Cold-start first paint is gated on the seed/cache
+  being applied so the first tab can't paint un-blocked.
+- **Pop-up gate (F4).** Programmatic `window.open` is blocked; user-initiated or allowlisted origins
+  pass. (No recovery banner yet — see `known-issues.md`.)
+- **HTTPS-only.** Main-frame `http://` is upgraded to `https://` (request preserved, so form POSTs
+  aren't downgraded); loopback/`.local`/private-IP hosts are exempt. On HTTPS failure an interstitial
+  offers an explicit per-site "continue insecurely" — never a silent fallback — backed by a scoped
+  `NSAllowsArbitraryLoadsInWebContent` ATS exemption (web-content only; the app's own URLSession
+  traffic keeps full ATS). WebKit's active mixed-content blocking is unaffected.
+- **Tracking-param stripping.** Curated AdGuard/ClearURLs-style seed; applied only to user-initiated
+  GET navigations (`.linkActivated` or non-redirect `.other`), never to form submissions, POSTs, or
+  redirects — so auth/session params can't be touched.
+- **Safari UA.** `applicationNameForUserAgent` set so WebKit assembles a real Safari UA string.
+
+---
+
+## 6. Original phased plan → status
+
+**Done (now described as reality in §3–§5):**
+- **Phase 0 — macOS MVP.** ✓
+- **Phase 1 — Navigation shell.** ✓ — omnibox (summon-only spotlight), multiple tabs (rail
+  host-grouping), back/forward/reload. Security state is shown via the HTTPS / trust indicators
+  rather than a separate TLS lock; there is no page-load progress bar.
+- **Phase 2 — Blocking.** ✓ — 2a pipeline, 2b runtime fetch/convert + EasyPrivacy + cosmetic +
+  fallback, 2c popup gate, 2d DEBUG Web Inspector. Multi-list chunking is available-by-design but not
+  currently needed; advanced cosmetic filtering remains ☐ (backlog).
+- **Phase 4 — Bookmarks & history.** ✓ — and extended well beyond the original scope: the rail +
+  flyout, summon-only spotlight, bookmarks-on-new-tab, the hybrid trust model, and the full-page
+  History / Trusted Sites / Shortcuts / Downloads surfaces with the ephemeral internal-surface rule.
+
+**Built beyond the original plan (✓):** hybrid trust model, HTTPS-only, tracking-param stripping,
+cookie-consent blocking, Safari UA, persistent download history, the shortcut registry + editable
+page, drag-reorderable rail.
+
+**Remaining (☐ not started) — design intent preserved below:**
 
 ### Phase 3 — Anti-adblock evasion (macOS)
 - **Goal.** View pages that demand you disable your adblocker, without actually disabling blocking.
-- **Realistic scope — read this.** Anti-adblock is an arms race, not a toggle: the aim is to defeat
-  the *common* detection patterns, accepting that some stubborn sites will still need case-by-case
-  handling. State this plainly so forkers aren't misled into expecting a universal, permanent bypass.
-- **Detection methods to counter:** bait requests (decoy `ads.js`-style files fetched to see if
-  they're blocked), bait elements (decoy ad `<div>`s checked for being hidden/removed),
-  missing-global checks (e.g. `adsbygoogle` and ad-SDK objects being absent), and packaged
-  anti-adblock scripts.
-- **Approach:**
-  - (a) Add a maintained anti-adblock filter list (AdGuard / EasyList family) so the counters are
-    maintained upstream rather than hand-written — same philosophy as the ad/tracker lists in Phase 2.
-  - (b) For bait requests, return harmless valid stub responses via request interception
-    (`WKURLSchemeHandler`) and/or a document-start `WKUserScript` that defines the globals sites
-    probe for, so missing-global checks pass.
-- **Mechanism note (important).** This is a *different* mechanism from the declarative
-  `WKContentRuleList` blocking in Phase 2: it **intercepts and injects** rather than merely blocking,
-  and the injected JS runs on **every page** — so it carries its own privacy review (keep it minimal,
-  no data egress, audit every injected script before it ships).
-- **Pairs with 2d (Web Inspector).** You can't tell which bait a given wall keys on without watching
-  its requests and DOM live — diagnose with the inspector, then add the matching list rule or stub.
+- **Realistic scope.** Anti-adblock is an arms race, not a toggle: defeat the *common* detection
+  patterns, accepting that some stubborn sites still need case-by-case handling.
+- **Detection methods to counter:** bait requests (decoy `ads.js`-style files), bait elements (decoy
+  ad `<div>`s checked for being hidden/removed), missing-global checks (`adsbygoogle` / ad-SDK
+  objects absent), and packaged anti-adblock scripts.
+- **Approach:** (a) a maintained anti-adblock filter list (AdGuard / EasyList family); (b) for bait
+  requests, harmless valid stub responses via request interception (`WKURLSchemeHandler`) and/or a
+  document-start `WKUserScript` defining the probed globals.
+- **Mechanism note.** Different from the declarative `WKContentRuleList` blocking — it **intercepts
+  and injects**, and the injected JS runs on **every page**, so it carries its own privacy review
+  (keep it minimal, no data egress, audit every script). Pairs with the DEBUG Web Inspector for
+  diagnosing which bait a wall keys on.
 
-### Phase 4 — Bookmarks & history (macOS)
-- **UI/layout/behaviour:** `docs/ui-wireframes.md` is authoritative for this phase (rail, spotlight,
-  bookmarks, history) — read it before building.
-- Supersedes the always-visible omnibox: the address bar becomes **summon-only** (`⌘L`) per the
-  wireframes, while keeping the existing URL-vs-DuckDuckGo-search parsing unchanged.
-- F6: `BookmarkStore`; New Tab page shows the bookmark grid.
-- F7: `HistoryStore` with full-text search, date grouping, auto-expiry; local-only.
+### Phase 5 — IP routing (F1, macOS)
+- `ProxyManager` wiring `WKWebsiteDataStore.proxyConfigurations` (SOCKS5) to the user's self-hosted
+  WireGuard or a local Tor SOCKS port. WebRTC shim + DNS-through-tunnel. Guard against the known
+  iOS 18.x `proxyConfigurations` crash pattern (set before first load; availability-gate).
 
-### Phase 5 — IP routing (macOS)
-- F1: `ProxyManager` wiring `proxyConfigurations` (SOCKS5) to the user's self-hosted WireGuard or a
-  local Tor SOCKS port. WebRTC shim + DNS-through-tunnel. Guard against the known iOS 18.x
-  `proxyConfigurations` crash pattern (set before first load; availability-gate).
+### Phase 6 — `SurfrCore` extraction + iOS app
+- Extract stable logic into a shared `SurfrCore` package; add the iOS SwiftUI target reusing it
+  (`UIViewRepresentable` WKWebView); re-verify F1–F8 on iOS. Everything is in the single macOS
+  `Surfr` target today; the data layers are already import-clean (no AppKit/SwiftUI/WebKit in
+  `HistoryStore`/`BookmarkStore`/`DownloadStore`/`Omnibox`) to ease the move.
 
-### Phase 6 — Promote core + iOS app
-- Extract stable logic into `SurfrCore`; add the iOS SwiftUI target reusing it (`UIViewRepresentable`
-  WKWebView). Re-verify F1–F8 on iOS.
+### Phase 7 — Password vault (F5)
+- Encrypted store (CryptoKit AES-GCM; key wrapped by Secure Enclave / master password via Argon2id).
+  Generator + TOTP. Face/Touch ID gate. App Group shared with the autofill extension.
 
-### Phase 7 — Password vault
-- F5 (storage): encrypted store (CryptoKit AES-GCM; key wrapped by Secure Enclave / master password
-  via Argon2id). Generator + TOTP. Face/Touch ID gate. App Group shared with the autofill extension.
-
-### Phase 8 — System autofill
-- F5 (system): `ASCredentialProviderExtension` targets (iOS + macOS); QuickType + full UI; passkeys
-  (`ASPasskeyCredential`, iOS 17+). Note: fills detected login fields/QuickType/Safari, **not** the
-  generic context-menu on arbitrary text fields (Apple-private) — same as all third-party managers.
+### Phase 8 — System autofill (F5)
+- `ASCredentialProviderExtension` targets (iOS + macOS); QuickType + full UI; passkeys
+  (`ASPasskeyCredential`, iOS 17+). Fills detected login fields/QuickType/Safari, **not** the generic
+  context-menu on arbitrary text fields (Apple-private) — as with all third-party managers.
 
 ### Phase 9 — Sync
 - CloudKit private DB, **end-to-end encrypted** (encrypt before upload) for vault, bookmarks,
   settings. History stays local unless explicitly opted in. Conflict handling: last-write-wins +
   per-record versioning.
 
+### Anti-fingerprinting (v2)
+- Canvas / timezone / client-hint surface spoofing. Scoped to v2 in the original plan. ☐
+
 ---
 
-## 5. Conventions
+## 7. Architecture
+
+**Current (as built).** A single macOS SwiftUI app target `Surfr` (deployment macOS 14). WebKit
+(`WKWebView`) via `NSViewRepresentable`. Linked packages: **GRDB** (stores), **SafariConverterLib**
+(`ContentBlockerConverter`), **swift-psl** (`PublicSuffixList`, + transitive Punycode). Persistence:
+`Application Support/Surfr/{history,bookmarks,downloads}.sqlite` and `…/Blocklist/` cache;
+UserDefaults for trusted domains, shortcut overrides, and rail order; `WKWebsiteDataStore.default()`
+for trusted-site cookies.
+
+**Target (planned).** Extract stable logic into a shared `SurfrCore` package, add an iOS SwiftUI
+target reusing it, and add AutoFill / content-blocker / proxy extensions + CloudKit sync.
+
+```
+            ┌──────────── SurfrCore (planned package) ──────────┐
+            │ TabEngine · ProxyManager · ContentBlockerCompiler │
+            │ VaultCrypto · SyncEngine · History/Bookmark/Download │
+            │ OmniboxParser · TrustStore                         │
+            └───▲───────────────▲────────────────────▲──────────┘
+        ┌───────┴──┐      ┌──────┴───────┐     ┌──────┴───────────┐
+        │ macOS app│      │  iOS app     │     │ Extensions:      │
+        │ (built)  │      │ (planned)    │     │ AutoFill ×2 ·    │
+        │ WKWebView│      │ WKWebView    │     │ Content Blocker ·│
+        └──────────┘      └──────────────┘     │ Proxy/Network    │
+                                               └──────────────────┘
+```
+
+---
+
+## 8. Conventions
 - Module/product name `Surfr`; display name "surf-r"; bundle base `com.zeviter.surfr`.
-- Shared logic lives in `SurfrCore`; UI targets stay thin.
+- Shared logic is written import-clean so it can move into `SurfrCore`; UI stays thin.
 - No secrets in the repo (see `.gitignore`). No telemetry/analytics anywhere.
-- Prefer Apple-native frameworks over third-party deps; vet any dependency for privacy.
+- Prefer Apple-native frameworks; vet any dependency for privacy.
+- Keyboard bindings flow through `ShortcutRegistry` (override ?? default) — never hardcode keys in
+  the menu or key handlers.
 
-## 6. Security model (summary)
-Protects against: cross-site cookie tracking, ad/tracker requests, IP exposure to sites,
-unrequested popups, vault theft (E2E + Secure Enclave). Does **not** provide: anonymity/crowd-
-blending (self-hosted exit is a static IP), defence against a malicious relay you don't control,
-or protection from on-device malware. State these honestly in any user-facing privacy copy.
+## 9. Security model (summary)
+Protects against: cross-site cookie tracking (ephemeral-by-default + per-site trust), ad/tracker
+requests and cookie-consent walls, unrequested pop-ups, insecure (http) connections (HTTPS-only),
+URL tracking params, and embedded-browser fingerprinting via UA. Will also protect (when built): IP
+exposure (F1) and vault theft (F5, E2E + Secure Enclave). Does **not** provide: anonymity/crowd-
+blending (a self-hosted exit is a static IP), defence against a malicious relay you don't control, or
+protection from on-device malware. State these honestly in any user-facing privacy copy.
 
-## 7. Human-only steps
+## 10. Human-only steps
 Apple Developer enrolment, signing identities/certs, first-time capability prompts (CloudKit,
 AutoFill, Network Extension), and anything requiring payment or accepting Apple's terms. The build
 agent pauses and hands these to the user.
 
-## 8. Decisions
-- **F3 fetch-and-convert at runtime (not bundle-only).** EasyList changes constantly; fetching keeps
-  it current without shipping an app update for every list change.
-- **Maintained converter, never hand-rolled.** Adblock filter syntax evolves; delegating conversion
-  to a maintained converter (AdGuard `SafariConverterLib`) or a reputable pre-converted source avoids
-  chasing syntax changes ourselves.
-- **Bundled seed list.** A small seed list ships in the app so the browser blocks from first launch,
-  before any fetch — and survives fetch/convert/compile failures as the initial last-good fallback.
+## 11. Key decisions
+- **Hybrid trust over pure-ephemeral.** Pure ephemeral broke logins (re-auth per tab / per launch);
+  a per-site persistent allowlist (F2's "optional per-domain persistent") keeps privacy-by-default
+  while letting trusted sites stay logged in. HTTP can never be trusted.
+- **F3 fetch-and-convert at runtime, maintained converter, bundled seed.** EasyList changes
+  constantly; fetching keeps it current. Conversion is delegated to AdGuard `SafariConverterLib`
+  (never hand-rolled). A bundled seed blocks from first launch and is the initial last-good fallback.
+- **Registrable-domain trust via the full PSL** (`swift-psl`), so unusual multi-label TLDs resolve
+  correctly; a heuristic remains as fallback.
+- **HTTPS-only escape hatch is explicit + scoped.** The ATS exemption is `…InWebContent` only, and
+  http loads only after the user opts in per-site.
