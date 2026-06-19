@@ -128,11 +128,14 @@ struct HistoryPage: View {
                     primary: entry.title,
                     secondary: entry.url,
                     trailingMeta: HistoryPageModel.meta(for: entry),
-                    onOpen: { if let url = URL(string: entry.url) { onOpenURL(url) } },
-                    trailingActionIcon: "xmark",
-                    trailingActionHelp: "Delete from history",
-                    trailingAction: { model.delete(entry) }
-                )
+                    onOpen: { if let url = URL(string: entry.url) { onOpenURL(url) } }
+                ) {
+                    Button { model.delete(entry) } label: {
+                        Image(systemName: "xmark").font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete from history")
+                }
             }
         )
         // Live search: re-runs whenever the query changes (cancelling the prior load).

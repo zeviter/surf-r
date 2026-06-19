@@ -19,6 +19,16 @@ extension Notification.Name {
     static let goBack = Notification.Name("goBack")
     /// Posted by the ⌘] menu command: navigate the active tab forward.
     static let goForward = Notification.Name("goForward")
+    /// Slice 9a — reload variants on the active tab's web view.
+    static let reloadPage = Notification.Name("reloadPage")
+    static let reloadHard = Notification.Name("reloadHard")
+    static let reloadEmptyCache = Notification.Name("reloadEmptyCache")
+    /// Slice 9a — open internal surfaces (switch to existing, no duplicate).
+    static let openHistory = Notification.Name("openHistory")
+    static let openTrusted = Notification.Name("openTrusted")
+    static let openDownloads = Notification.Name("openDownloads")
+    /// Slice 9a — shortcuts page is 9b; ⌘/ is registered but stubbed for now.
+    static let openShortcuts = Notification.Name("openShortcuts")
 }
 
 private let homeURL = URL(string: "https://duckduckgo.com")!
@@ -35,6 +45,7 @@ final class Tab: ObservableObject, Identifiable {
     enum Kind: Equatable {
         case web
         case history
+        case trustedSites
     }
 
     let id = UUID()
@@ -234,7 +245,7 @@ final class BrowserState: ObservableObject {
         wire(first)
         bindActiveURL()
         // Refresh the window title whenever the trust set changes (fires immediately).
-        trustBinding = TrustStore.shared.$domains.sink { [weak self] _ in
+        trustBinding = TrustStore.shared.$trustedDomains.sink { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshWindowTitle() }
         }
         recomputeHostGroups()
@@ -251,13 +262,24 @@ final class BrowserState: ObservableObject {
         activeTabID = tab.id   // didSet bumps activation, discards prior pristine, recomputes
     }
 
-    /// Open the full-page history view in a new foreground tab (rail history icon).
-    /// It's an internal page: no host, not in the rail favicon stack, not discarded.
-    func openHistoryPage() {
-        let tab = Tab(page: .history, title: "History")
-        tabs.append(tab)
-        wire(tab)
-        activeTabID = tab.id
+    /// Open the full-page history view (rail history icon / ⌘Y).
+    func openHistoryPage() { openInternalPage(.history, title: "History") }
+
+    /// Open the Trusted Sites page (rail shield icon / ⌘⇧Y).
+    func openTrustedSitesPage() { openInternalPage(.trustedSites, title: "Trusted Sites") }
+
+    /// Open an internal-page surface: if one of this kind is already open, switch to
+    /// it (no duplicate); otherwise create it. It's a host-less page — not in the
+    /// rail favicon stack and not discarded as pristine.
+    func openInternalPage(_ kind: Tab.Kind, title: String) {
+        if let existing = tabs.first(where: { $0.kind == kind }) {
+            activeTabID = existing.id
+        } else {
+            let tab = Tab(page: kind, title: title)
+            tabs.append(tab)
+            wire(tab)
+            activeTabID = tab.id
+        }
     }
 
     /// Open `url` in a new foreground tab (⌘Enter from the omnibox).
@@ -359,7 +381,7 @@ final class BrowserState: ObservableObject {
     /// domain is trusted (system titles are plain text — no badge graphic here).
     private func refreshWindowTitle() {
         let tab = activeTab
-        if tab.kind == .history { windowTitle = "History"; return }
+        if tab.kind != .web { windowTitle = tab.title; return }   // internal pages (History, Trusted Sites)
         let base: String
         if !tab.hasNavigated {
             base = "New Tab"
@@ -869,27 +891,15 @@ struct RailView: View {
     /// Whether the downloads manager popover is open. UI-only state.
     @State private var showDownloads = false
 
+    /// Default pinned order (slice 9a): history → downloads → trusted → new tab.
     var body: some View {
         VStack(spacing: 8) {
-            // History — opens the full-page history view in a NEW tab (§7).
-            Button(action: browser.openHistoryPage) {
-                Image(systemName: "clock")
-                    .font(.system(size: 16))
-                    .frame(width: 32, height: 28)
-            }
-            .buttonStyle(.plain)
-            .help("History")
+            // History — opens the full-page history view (§7). Green when active.
+            railIconButton("clock", help: "History", isActive: browser.activeTab.kind == .history,
+                           action: browser.openHistoryPage)
 
-            // New tab — same behaviour as ⌘T.
-            Button(action: browser.newTab) {
-                Image(systemName: "plus")
-                    .font(.system(size: 16))
-                    .frame(width: 32, height: 28)
-            }
-            .buttonStyle(.plain)
-            .help("New Tab (⌘T)")
-
-            // Downloads — manager popover; icon reflects active/completed/idle state.
+            // Downloads — manager popover; icon keeps its active/completed/idle states.
+            // (Its active-tab green arrives in 9c when downloads becomes a page.)
             DownloadsRailIcon {
                 showDownloads = true
                 DownloadManager.shared.acknowledge()   // opening clears the green state
@@ -897,6 +907,16 @@ struct RailView: View {
             .popover(isPresented: $showDownloads, arrowEdge: .trailing) {
                 DownloadsPopover()
             }
+
+            // Trusted Sites — opens the trusted-sites page (§8). Green when active.
+            railIconButton("checkmark.shield", help: "Trusted Sites",
+                           isActive: browser.activeTab.kind == .trustedSites,
+                           action: browser.openTrustedSitesPage)
+
+            // New tab — same behaviour as ⌘T. Green while the new-tab page is active.
+            railIconButton("plus", help: "New Tab (⌘T)",
+                           isActive: browser.activeTab.kind == .web && !browser.activeTab.hasNavigated,
+                           action: browser.newTab)
 
             Divider().frame(width: 30)
 
@@ -935,6 +955,25 @@ struct RailView: View {
             // If the flyout's host disappeared (its last tab closed), drop the stale state.
             if let open = flyoutHost, !hosts.contains(open) { flyoutHost = nil }
         }
+        // ⌘⇧J / Downloads menu: the rail owns the popover state, so open it here.
+        .onReceive(NotificationCenter.default.publisher(for: .openDownloads)) { _ in
+            showDownloads = true
+            DownloadManager.shared.acknowledge()
+        }
+    }
+
+    /// A pinned rail icon button. `isActive` tints it green (reusing the trusted/
+    /// completed green) when its surface is the active tab.
+    private func railIconButton(_ systemName: String, help: String,
+                                isActive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 16))
+                .foregroundStyle(isActive ? Color.green : Color.primary)
+                .frame(width: 32, height: 28)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     /// Presents the flyout for `host` when it's the open one; dismissal clears it.
@@ -1085,6 +1124,8 @@ struct ActiveTabContent: View {
         case .history:
             // Internal page: clicking a row always opens in a NEW tab.
             HistoryPage(onOpenURL: { onNavigate($0, true) })
+        case .trustedSites:
+            TrustedSitesPage(onOpenURL: { onNavigate($0, true) })
         case .web:
             if tab.hasNavigated {
                 WebView(webView: tab.webView)
@@ -1092,6 +1133,55 @@ struct ActiveTabContent: View {
             } else {
                 NewTabPage(tab: tab, onNavigate: onNavigate, focusToken: focusToken)
             }
+        }
+    }
+}
+
+/// Slice 9a — bundles the reload + open-surface notification handlers. These need
+/// only `browser`, so collapsing them into one modifier keeps `ContentView.body`'s
+/// modifier chain small enough for the Swift type-checker.
+private struct BrowserCommandHandlers: ViewModifier {
+    @ObservedObject var browser: BrowserState
+
+    func body(content: Content) -> some View {
+        content
+            .onReceive(NotificationCenter.default.publisher(for: .reloadPage)) { _ in
+                browser.activeTab.webView.reload()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .reloadHard)) { _ in
+                browser.activeTab.webView.reloadFromOrigin()   // bypass cache
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .reloadEmptyCache)) { _ in
+                emptyCacheAndReload()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openHistory)) { _ in
+                browser.openHistoryPage()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openTrusted)) { _ in
+                browser.openTrustedSitesPage()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openShortcuts)) { _ in
+                // Stub: the shortcuts page is slice 9b. ⌘/ is registered + reaches here.
+                #if DEBUG
+                print("[Shortcuts] open requested — page lands in 9b")
+                #endif
+            }
+    }
+
+    /// Clear only the active tab's caches (not cookies — trusted sessions survive),
+    /// then hard-reload. Cache clearing runs off-main via the async data API.
+    private func emptyCacheAndReload() {
+        let webView = browser.activeTab.webView
+        let store = webView.configuration.websiteDataStore
+        let cacheTypes: Set<String> = [
+            WKWebsiteDataTypeDiskCache,
+            WKWebsiteDataTypeMemoryCache,
+            WKWebsiteDataTypeFetchCache,
+            WKWebsiteDataTypeOfflineWebApplicationCache,
+        ]
+        Task { @MainActor in
+            await store.removeData(ofTypes: cacheTypes, modifiedSince: .distantPast)
+            webView.reloadFromOrigin()
         }
     }
 }
@@ -1235,6 +1325,10 @@ struct ContentView: View {
             let webView = browser.activeTab.webView
             if webView.canGoForward { webView.goForward() }
         }
+        // Slice 9a — reload variants + open-surface commands (collapsed into one
+        // modifier to keep `body` within the type-checker's budget). `.openDownloads`
+        // is handled by RailView (it owns the popover state).
+        .modifier(BrowserCommandHandlers(browser: browser))
     }
 
     // MARK: - Addition 3: mouse side-button back/forward

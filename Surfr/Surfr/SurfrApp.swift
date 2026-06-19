@@ -13,6 +13,9 @@ struct SurfrApp: App {
     @ObservedObject private var bookmarks = BookmarkState.shared
     /// Drives the trust command's title from the active domain's trust state.
     @ObservedObject private var trust = TrustStore.shared
+    /// Source of effective shortcut bindings; observed so the menu updates if a
+    /// future editor remaps a key (slice 9a — overrides empty by default).
+    @ObservedObject private var shortcuts = ShortcutRegistry.shared
 
     /// The active tab's host (tracked via `BookmarkState.activeURL`), if it's a
     /// real web page the trust command can act on.
@@ -27,26 +30,58 @@ struct SurfrApp: App {
             ContentView()
         }
         .commands {
+            // All shortcuts route through ShortcutRegistry's effective bindings via
+            // `.appShortcut(id, shortcuts)` — never hardcoded — so a future editor
+            // can remap any of them and the menu updates.
             CommandGroup(after: .newItem) {
                 Button("New Tab") {
                     NotificationCenter.default.post(name: .newTab, object: nil)
                 }
-                .keyboardShortcut("t", modifiers: .command)
+                .appShortcut(.newTab, shortcuts)
 
                 Button("Close Tab") {
                     NotificationCenter.default.post(name: .closeTab, object: nil)
                 }
-                .keyboardShortcut("w", modifiers: .command)
+                .appShortcut(.closeTab, shortcuts)
+
+                Divider()
 
                 Button("Open Location…") {
                     NotificationCenter.default.post(name: .focusOmnibox, object: nil)
                 }
-                .keyboardShortcut("l", modifiers: .command)
+                .appShortcut(.openLocation, shortcuts)
+
+                Button("Reload Page") {
+                    NotificationCenter.default.post(name: .reloadPage, object: nil)
+                }
+                .appShortcut(.reload, shortcuts)
+
+                Button("Hard Reload (Bypass Cache)") {
+                    NotificationCenter.default.post(name: .reloadHard, object: nil)
+                }
+                .appShortcut(.hardReload, shortcuts)
+
+                Button("Empty Cache and Hard Reload") {
+                    NotificationCenter.default.post(name: .reloadEmptyCache, object: nil)
+                }
+                .appShortcut(.emptyCacheReload, shortcuts)
+
+                Button("Back") {
+                    NotificationCenter.default.post(name: .goBack, object: nil)
+                }
+                .appShortcut(.back, shortcuts)
+
+                Button("Forward") {
+                    NotificationCenter.default.post(name: .goForward, object: nil)
+                }
+                .appShortcut(.forward, shortcuts)
+
+                Divider()
 
                 Button(bookmarks.isActiveBookmarked ? "Remove Bookmark" : "Bookmark Page") {
                     NotificationCenter.default.post(name: .toggleBookmark, object: nil)
                 }
-                .keyboardShortcut("d", modifiers: .command)
+                .appShortcut(.bookmark, shortcuts)
 
                 // Slice C1: trust the active site's domain so its session persists
                 // (shared persistent store). Disabled when there's no real page.
@@ -55,20 +90,30 @@ struct SurfrApp: App {
                        : "Trust This Site (Stay Logged In)") {
                     NotificationCenter.default.post(name: .toggleTrust, object: nil)
                 }
-                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .appShortcut(.trustSite, shortcuts)
                 .disabled(activeHost == nil)
 
-                // Addition 3: keyboard back/forward (was missing). Pairs with the
-                // swipe-gesture and mouse side-button paths wired in ContentView.
-                Button("Back") {
-                    NotificationCenter.default.post(name: .goBack, object: nil)
-                }
-                .keyboardShortcut("[", modifiers: .command)
+                Divider()
 
-                Button("Forward") {
-                    NotificationCenter.default.post(name: .goForward, object: nil)
+                Button("History") {
+                    NotificationCenter.default.post(name: .openHistory, object: nil)
                 }
-                .keyboardShortcut("]", modifiers: .command)
+                .appShortcut(.history, shortcuts)
+
+                Button("Trusted Sites") {
+                    NotificationCenter.default.post(name: .openTrusted, object: nil)
+                }
+                .appShortcut(.trustedSites, shortcuts)
+
+                Button("Downloads") {
+                    NotificationCenter.default.post(name: .openDownloads, object: nil)
+                }
+                .appShortcut(.downloads, shortcuts)
+
+                Button("Keyboard Shortcuts") {
+                    NotificationCenter.default.post(name: .openShortcuts, object: nil)
+                }
+                .appShortcut(.shortcuts, shortcuts)
 
                 #if DEBUG
                 Button("Run History Self-Test") {

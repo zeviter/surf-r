@@ -18,14 +18,50 @@ import Combine
 final class TrustStore: ObservableObject {
     static let shared = TrustStore()
 
-    /// Trusted registrable domains (lowercased). Source of truth for matching.
-    @Published private(set) var domains: Set<String>
+    /// One trusted domain with the date it was trusted (slice 8).
+    struct TrustedSite: Identifiable {
+        let domain: String
+        let trustedOn: Date
+        var id: String { domain }
+    }
 
-    private let defaultsKey = "SurfrTrustedDomains"
+    /// Source of truth: trusted registrable domain (lowercased) → trusted-on date.
+    @Published private(set) var trustedDomains: [String: Date]
+
+    /// Just the trusted domains, for matching. `isTrusted` is unchanged.
+    var domains: Set<String> { Set(trustedDomains.keys) }
+
+    /// Trusted sites, most-recently-trusted first (drives the Trusted Sites page).
+    var trustedSites: [TrustedSite] {
+        trustedDomains
+            .map { TrustedSite(domain: $0.key, trustedOn: $0.value) }
+            .sorted { $0.trustedOn > $1.trustedOn }
+    }
+
+    /// V2 stores a domain→date map. V1 stored a bare `[String]` set (no dates).
+    private let mapKey = "SurfrTrustedDomainsV2"
+    private let legacyKey = "SurfrTrustedDomains"
 
     private init() {
-        let saved = UserDefaults.standard.stringArray(forKey: "SurfrTrustedDomains") ?? []
-        domains = Set(saved.map { $0.lowercased() })
+        let defaults = UserDefaults.standard
+        if let raw = defaults.dictionary(forKey: "SurfrTrustedDomainsV2") {
+            // V2: load the date map.
+            var map: [String: Date] = [:]
+            for (key, value) in raw where value is Date {
+                map[key.lowercased()] = value as? Date
+            }
+            trustedDomains = map.compactMapValues { $0 }
+        } else if let legacy = defaults.stringArray(forKey: "SurfrTrustedDomains") {
+            // Migrate V1 set → V2 map. We don't know the original trust dates, so
+            // stamp already-trusted domains with "now" (a sensible default) and
+            // rewrite in the new format.
+            let now = Date()
+            trustedDomains = Dictionary(uniqueKeysWithValues: legacy.map { ($0.lowercased(), now) })
+            defaults.set(trustedDomains, forKey: "SurfrTrustedDomainsV2")
+            defaults.removeObject(forKey: "SurfrTrustedDomains")
+        } else {
+            trustedDomains = [:]
+        }
     }
 
     // MARK: - Matching (subdomain-spanning)
@@ -44,11 +80,12 @@ final class TrustStore: ObservableObject {
 
     // MARK: - Mutation
 
-    /// Trust the registrable domain covering `host` (so all its subdomains match).
+    /// Trust the registrable domain covering `host` (so all its subdomains match),
+    /// recording the trusted-on date (now).
     func trust(host: String) {
         let domain = Self.registrableDomain(for: host)
         guard !domain.isEmpty else { return }
-        domains.insert(domain)
+        trustedDomains[domain] = Date()
         persist()
         #if DEBUG
         print("[Trust] now trusting \(domain)")
@@ -62,8 +99,8 @@ final class TrustStore: ObservableObject {
         let domain = Self.registrableDomain(for: host)
         // Remove the derived registrable domain plus any stored entry that covers
         // this host (in case it was trusted under a different derivation).
-        let removed = domains.filter { $0 == domain || lowerHost == $0 || lowerHost.hasSuffix("." + $0) }
-        domains.subtract(removed)
+        let removed = trustedDomains.keys.filter { $0 == domain || lowerHost == $0 || lowerHost.hasSuffix("." + $0) }
+        for d in removed { trustedDomains[d] = nil }
         persist()
         for d in removed { Self.clearPersistentData(forDomain: d) }
         #if DEBUG
@@ -72,7 +109,7 @@ final class TrustStore: ObservableObject {
     }
 
     private func persist() {
-        UserDefaults.standard.set(domains.sorted(), forKey: defaultsKey)
+        UserDefaults.standard.set(trustedDomains, forKey: mapKey)
     }
 
     // MARK: - Persistent-store data clearing

@@ -53,15 +53,29 @@ struct FaviconView: View {
 /// (`TrustStore.isTrusted`), the row gets a green accent + the trusted badge,
 /// consistent with the rail/bookmark tile badge. Tapping anywhere but the trailing
 /// action calls `onOpen`.
-struct PageRow: View {
+struct PageRow<Trailing: View>: View {
     let host: String
     let primary: String
-    var secondary: String? = nil
-    var trailingMeta: String? = nil
+    let secondary: String?
+    let trailingMeta: String?
     let onOpen: () -> Void
-    var trailingActionIcon: String? = nil
-    var trailingActionHelp: String = ""
-    var trailingAction: (() -> Void)? = nil
+    /// Trailing controls (e.g. a delete ✕, or Open + untrust). Caller-supplied so
+    /// the same row serves pages with different actions.
+    @ViewBuilder let trailing: () -> Trailing
+
+    init(host: String,
+         primary: String,
+         secondary: String? = nil,
+         trailingMeta: String? = nil,
+         onOpen: @escaping () -> Void,
+         @ViewBuilder trailing: @escaping () -> Trailing) {
+        self.host = host
+        self.primary = primary
+        self.secondary = secondary
+        self.trailingMeta = trailingMeta
+        self.onOpen = onOpen
+        self.trailing = trailing
+    }
 
     @ObservedObject private var trustStore = TrustStore.shared
     private var trusted: Bool { trustStore.isTrusted(host: host) }
@@ -88,13 +102,7 @@ struct PageRow: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize()
             }
-            if let trailingActionIcon, let trailingAction {
-                Button(action: trailingAction) {
-                    Image(systemName: trailingActionIcon).font(.caption)
-                }
-                .buttonStyle(.plain)
-                .help(trailingActionHelp)
-            }
+            trailing()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -128,6 +136,9 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
     let searchPrompt: String
     let sections: [PageSection<Item>]
     let emptyMessage: String
+    /// Optional one-line hint shown under `emptyMessage` only in the true-empty
+    /// state (not for "no results"). e.g. the ⌘⇧T hint on the trusted-sites page.
+    let emptyHint: String?
     let noResultsMessage: String
     @ViewBuilder let actions: () -> Actions
     @ViewBuilder let row: (Item) -> Row
@@ -137,6 +148,7 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
          searchPrompt: String = "Search",
          sections: [PageSection<Item>],
          emptyMessage: String,
+         emptyHint: String? = nil,
          noResultsMessage: String = "No results",
          @ViewBuilder actions: @escaping () -> Actions,
          @ViewBuilder row: @escaping (Item) -> Row) {
@@ -145,6 +157,7 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
         self.searchPrompt = searchPrompt
         self.sections = sections
         self.emptyMessage = emptyMessage
+        self.emptyHint = emptyHint
         self.noResultsMessage = noResultsMessage
         self.actions = actions
         self.row = row
@@ -181,10 +194,15 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
             Divider()
 
             if sections.isEmpty {
-                VStack {
+                VStack(spacing: 6) {
                     Spacer()
                     Text(query.isEmpty ? emptyMessage : noResultsMessage)
                         .foregroundStyle(.secondary)
+                    if query.isEmpty, let emptyHint {
+                        Text(emptyHint)
+                            .font(.callout)
+                            .foregroundStyle(.tertiary)
+                    }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

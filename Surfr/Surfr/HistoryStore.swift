@@ -108,6 +108,21 @@ final class HistoryStore {
         }
     }
 
+    /// Total visits for a registrable `domain`: sums `visitCount` across the apex
+    /// host and every stored subdomain (`host == domain` OR `host` ends in
+    /// `.domain`) — the same subdomain-spanning semantics as trust matching.
+    func visitCount(forDomain domain: String) async -> Int {
+        let d = domain.lowercased()
+        guard !d.isEmpty else { return 0 }
+        let subdomainPattern = "%.\(Self.escapeLike(d))"
+        return await read(default: 0) { db in
+            try Int.fetchOne(db, sql: """
+                SELECT COALESCE(SUM(visitCount), 0) FROM history
+                WHERE host = ? OR host LIKE ? ESCAPE '\\'
+                """, arguments: [d, subdomainPattern]) ?? 0
+        }
+    }
+
     /// Delete a single entry by row id.
     func delete(id: Int64) async {
         guard let dbQueue else { return }
