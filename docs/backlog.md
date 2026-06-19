@@ -34,31 +34,16 @@
 
 ## C. Deferred polish & fixes
 
-- ☐ **Exact registrable-domain via swift-psl.** `TrustStore.registrableDomain` is a pragmatic
-  eTLD+1 subset, not the full Public Suffix List. swift-psl is already a transitive dep; link it
-  for exact handling of unusual multi-label TLDs.
-- ☐ **OAuth redirect-chain rebind transient.** Crossing into an untrusted identity-provider domain
-  mid-login can briefly land the session in the wrong store (the "cookies not supported, fixed
-  after reloads" symptom). Mitigated by trusting the IdP (google/github). Real fix if it recurs:
-  don't rebind the store while a redirect chain is in flight.
 - ☐ **Federated-login UX.** Trusting a site isn't enough if it logs in via a different provider —
   you must trust the IdP too. Consider auto-trusting a small set of common identity providers, or
   detecting OAuth chains.
-- ☐ **Spotlight suggestion ranking.** Currently basic recency + substring; refine ordering/quality.
 - ☐ **Advanced cosmetic filtering.** Only basic `css-display-none` is applied. Scriptlets, `:has()`,
   extended CSS need document-start JS injection — its own slice with a privacy review.
-- ☐ **Cold-start first-paint blocking.** On a fresh launch the first tab can paint before the
-  content-rule list attaches; subsequent loads are covered. Make first paint deterministic.
-- ☐ **Background blocklist refresh.** Currently fetches on launch with a 24h cache; consider
-  refreshing while running.
 - ☐ **App icon.** Logo exists; needs placing into `Assets.xcassets/AppIcon.appiconset` at the
   required sizes (manual Xcode step).
 - ☐ **Custom title bar (unlocks).** Would enable a **centered window title** and a real **trusted
   badge graphic** in the title (currently text-only, "· Trusted: <Domain>"), both blocked by
   Tahoe's plain-text leading-aligned system title.
-- ☐ **Confirm `⌘W` semantics.** Verify close-tab vs close-window behaves as intended (note a prior
-  coexistence between Surfr's close-tab and SwiftUI's window-close).
-
 ## D. Known limitations (documented; by-design or low priority)
 
 - **Schemeless single-label hosts** (e.g. `intranet`, `devbox:3000`) parse as searches — workaround
@@ -70,6 +55,21 @@
   converts in seconds; the seed protects meanwhile. Cosmetic only.
 
 ## Recently completed (short-term context; pruned over time)
+
+- ✓ **Exact registrable domains via swift-psl.** Linked the `PublicSuffixList` product;
+  `TrustStore.registrableDomain` now uses `effectiveTLDPlusOne` (full PSL), with the old heuristic
+  as fallback. Common domains resolve identically, so existing trusted entries are unaffected.
+- ✓ **OAuth redirect-chain rebind guard.** Store decision is bound at chain start; mid-chain
+  redirect hops no longer rebind (fixes "cookies not supported, fixed after reloads"). A real
+  trust mismatch is reconciled once the chain settles (didFinish).
+- ✓ **Spotlight suggestion ranking.** Blended score: match quality (host/title prefix > contains),
+  visit frequency (`visitCount`), bookmark boost; recent-history → bookmarks tie-break, search last.
+- ✓ **Cold-start first-paint blocking.** `prepare()` split into gated last-good (seed/cache) +
+  ungated network refresh; the first page load waits for the seed to apply, then is a no-op.
+- ✓ **Background blocklist refresh.** Re-checks staleness on app-foreground and a 6h timer, reusing
+  the launch fetch→convert→last-good path; DEBUG-logged, no UI.
+- ✓ **`⌘W` semantics.** Verified ⌘W = Close Tab (authoritative; AppKit's window-close is
+  shortcut-less, Close All is ⌘⌥W). Added browser-standard ⌘⇧W = Close Window.
 
 - ✓ **9a — Shortcut registry + missing shortcuts + rail polish.** Single-source-of-truth registry
   with an override layer; added reload (`⌘R`/`⌘⇧R`/`⌘⌥R`) and page shortcuts (`⌘Y`/`⌘⇧Y`/`⌘⇧J`/`⌘/`);
