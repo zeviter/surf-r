@@ -30,6 +30,8 @@ extension Notification.Name {
     static let openDownloads = Notification.Name("openDownloads")
     /// Slice 9a — shortcuts page is 9b; ⌘/ is registered but stubbed for now.
     static let openShortcuts = Notification.Name("openShortcuts")
+    /// Vault (F5, Slice 3): open the password vault — routes to first-run / unlock / surface.
+    static let openVault = Notification.Name("openVault")
 }
 
 private let homeURL = URL(string: "https://duckduckgo.com")!
@@ -49,6 +51,7 @@ final class Tab: ObservableObject, Identifiable {
         case trustedSites
         case shortcuts
         case downloads
+        case vault
     }
 
     let id = UUID()
@@ -287,6 +290,10 @@ final class BrowserState: ObservableObject {
 
     /// Open the full Downloads page (⌘⇧J or the popover's "See all"; slice 9c).
     func openDownloadsPage() { openInternalPage(.downloads, title: "Downloads") }
+
+    /// Open the Vault surface (F5). Only opened once unlocked — the gate overlay handles
+    /// first-run/unlock before this is called.
+    func openVaultPage() { openInternalPage(.vault, title: "Vault") }
 
     /// Open an internal-page surface: if one of this kind is already open, switch to
     /// it (no duplicate); otherwise create it. It's a host-less page — not in the
@@ -1038,7 +1045,7 @@ struct FaviconTile: View {
 /// trusted → shortcuts → new tab. The dynamic favicon host tiles below are NOT part
 /// of this — they keep their host-creation order.
 enum RailSurface: String, CaseIterable, Identifiable, Codable {
-    case history, downloads, trusted, shortcuts, newTab
+    case history, downloads, trusted, shortcuts, vault, newTab
     var id: String { rawValue }
 
     /// SF Symbol for the floating drag preview (matches each icon's glyph).
@@ -1048,6 +1055,7 @@ enum RailSurface: String, CaseIterable, Identifiable, Codable {
         case .downloads: return "arrow.down.circle"
         case .trusted: return "checkmark.shield"
         case .shortcuts: return "keyboard"
+        case .vault: return "key"
         case .newTab: return "plus"
         }
     }
@@ -1199,6 +1207,11 @@ struct RailView: View {
                         browser.openShortcutsPage()
                     }
                 }
+        case .vault:
+            // Posts .openVault so ContentView's gate routing decides first-run / unlock / surface.
+            railIconButton("key", help: "Vault",
+                           isActive: browser.activeTab.kind == .vault,
+                           action: { NotificationCenter.default.post(name: .openVault, object: nil) })
         case .newTab:
             railIconButton("plus", help: "New Tab (⌘T)",
                            isActive: browser.activeTab.kind == .web && !browser.activeTab.hasNavigated,
@@ -1392,6 +1405,8 @@ struct ActiveTabContent: View {
             ShortcutsPage()   // view-only (9b); editing is 9b2
         case .downloads:
             DownloadsPage()   // 9c — full page; the rail keeps its popover
+        case .vault:
+            VaultSurfacePlaceholder()   // F5 Slice 3 — list/detail arrive in Slice 5
         case .web:
             if tab.hasNavigated {
                 WebView(webView: tab.webView)
@@ -1467,6 +1482,10 @@ struct ContentView: View {
     @State private var mouseNavMonitor: Any?
     /// Slice C1 indicators: the trust toast currently shown (nil = none).
     @State private var trustToast: TrustToast?
+    /// F5 Slice 3: the password-vault coordinator (first-run / unlock / lock).
+    @StateObject private var vault = VaultGate()
+    /// Whether the vault gate overlay (first-run or unlock) is presented.
+    @State private var showVault = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1488,6 +1507,11 @@ struct ContentView: View {
                         .id(spotlightToken)
                 }
 
+                // F5 Slice 3: the vault gate overlay (first-run / unlock), dimmed like Spotlight.
+                if showVault {
+                    VaultOverlay(gate: vault, onClose: closeVault)
+                }
+
                 // Slice C1 indicators: trust toast, top-right, auto-dismiss ~7s.
                 if let toast = trustToast {
                     TrustToastView(toast: toast) { dismissTrustToast() }
@@ -1507,6 +1531,8 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 800, minHeight: 600)
+        // F5 Slice 3: make the vault coordinator available to the vault surface placeholder.
+        .environmentObject(vault)
         // Addition 5: bind the macOS window title to the active tab's page title.
         .navigationTitle(browser.windowTitle)
         // Addition 3: install/remove the app-local mouse side-button monitor.
@@ -1543,6 +1569,19 @@ struct ContentView: View {
                 await FaviconService.shared.runSelfTest()
             }
             #endif
+        }
+        .task { await vault.load() }
+        .onReceive(NotificationCenter.default.publisher(for: .openVault)) { _ in
+            // Route by vault phase: unlocked → open the surface; new → first-run; locked → unlock.
+            switch vault.phase {
+            case .unlocked:
+                browser.openVaultPage()
+            case .uninitialized:
+                vault.beginFirstRun()
+                showVault = true
+            case .locked, .firstRun:
+                showVault = true
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .toggleBookmark)) { _ in
             let webView = browser.activeTab.webView
@@ -1677,6 +1716,12 @@ struct ContentView: View {
         showSpotlight = false
         let webView = browser.activeTab.webView
         DispatchQueue.main.async { webView.window?.makeFirstResponder(webView) }
+    }
+
+    /// Dismiss the vault gate overlay; if a successful unlock just happened, open the vault surface.
+    private func closeVault() {
+        showVault = false
+        if vault.isUnlocked { browser.openVaultPage() }
     }
 
     /// Show a trust toast with a slide/fade in; replacing any current one restarts

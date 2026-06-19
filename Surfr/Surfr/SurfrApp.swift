@@ -132,6 +132,11 @@ struct SurfrApp: App {
                 }
                 .appShortcut(.shortcuts, shortcuts)
 
+                Button("Vault") {
+                    NotificationCenter.default.post(name: .openVault, object: nil)
+                }
+                .appShortcut(.vault, shortcuts)
+
                 #if DEBUG
                 Button("Run History Self-Test") {
                     Task { await HistoryStore.shared.runSelfTest() }

@@ -7,7 +7,7 @@ enum ShortcutID: String, CaseIterable, Codable {
     case reload, hardReload, emptyCacheReload
     case back, forward
     case bookmark, trustSite
-    case history, trustedSites, downloads, shortcuts
+    case history, trustedSites, downloads, shortcuts, vault
 }
 
 /// Grouping for the (later) shortcuts page/editor.
@@ -234,6 +234,8 @@ final class ShortcutRegistry: ObservableObject {
               category: .surfaces,   defaultCombo: c("j", [.command, .shift])),
         .init(id: .shortcuts,        name: "Keyboard Shortcuts",          detail: "Open this keyboard-shortcuts page",
               category: .surfaces,   defaultCombo: c("/", [.command])),
+        .init(id: .vault,            name: "Vault",                       detail: "Open the password vault",
+              category: .surfaces,   defaultCombo: c("v", [.command, .shift])),
     ]
 
     private static let reserved: [KeyCombo] = [

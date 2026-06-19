@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00A535532FE6043F00D009EB /* SurfrCore in Frameworks */ = {isa = PBXBuildFile; productRef = 00A535522FE6043F00D009EB /* SurfrCore */; };
 		AA01000000000000000000A3 /* ContentBlockerConverter in Frameworks */ = {isa = PBXBuildFile; productRef = AA01000000000000000000A2 /* ContentBlockerConverter */; };
 		AA01000000000000000000B3 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = AA01000000000000000000B2 /* GRDB */; };
 		AA01000000000000000000C3 /* PublicSuffixList in Frameworks */ = {isa = PBXBuildFile; productRef = AA01000000000000000000C2 /* PublicSuffixList */; };
@@ -29,6 +30,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				00A535532FE6043F00D009EB /* SurfrCore in Frameworks */,
 				AA01000000000000000000A3 /* ContentBlockerConverter in Frameworks */,
 				AA01000000000000000000B3 /* GRDB in Frameworks */,
 				AA01000000000000000000C3 /* PublicSuffixList in Frameworks */,
@@ -77,6 +79,7 @@
 				AA01000000000000000000A2 /* ContentBlockerConverter */,
 				AA01000000000000000000B2 /* GRDB */,
 				AA01000000000000000000C2 /* PublicSuffixList */,
+				00A535522FE6043F00D009EB /* SurfrCore */,
 			);
 			productName = Surfr;
 			productReference = 00458F262FE4558900320D64 /* Surfr.app */;
@@ -110,6 +113,7 @@
 				AA01000000000000000000A1 /* XCRemoteSwiftPackageReference "SafariConverterLib" */,
 				AA01000000000000000000B1 /* XCRemoteSwiftPackageReference "GRDB" */,
 				AA01000000000000000000C1 /* XCRemoteSwiftPackageReference "swift-psl" */,
+				00A535512FE6043F00D009EB /* XCLocalSwiftPackageReference "../SurfrCore" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 00458F272FE4558900320D64 /* Products */;
@@ -367,6 +371,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		00A535512FE6043F00D009EB /* XCLocalSwiftPackageReference "../SurfrCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../SurfrCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		AA01000000000000000000A1 /* XCRemoteSwiftPackageReference "SafariConverterLib" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -395,6 +406,10 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		00A535522FE6043F00D009EB /* SurfrCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SurfrCore;
+		};
 		AA01000000000000000000A2 /* ContentBlockerConverter */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = AA01000000000000000000A1 /* XCRemoteSwiftPackageReference "SafariConverterLib" */;
