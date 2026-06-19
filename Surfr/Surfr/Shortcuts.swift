@@ -182,9 +182,12 @@ final class ShortcutRegistry: ObservableObject {
 
     private static let reserved: [KeyCombo] = [
         c("q", [.command]),            // Quit
+        c("w", [.command]),            // Close (system / close-tab)
         c("h", [.command]),            // Hide
         c("h", [.command, .option]),   // Hide Others
         c("m", [.command]),            // Minimize
+        c("\t", [.command]),           // ⌘Tab — app switcher (system-intercepted)
+        c(" ", [.command]),            // ⌘Space — Spotlight (system-intercepted)
     ]
 }
 

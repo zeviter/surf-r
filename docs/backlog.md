@@ -9,8 +9,7 @@
 
 ## A. Active plan — current session's queue (rail / shortcuts)
 
-- ☐ **9b2 — shortcut editing** (remap with conflict + reserved-key detection, reset-to-default) —
-  deferred; the override layer built in 9a supports it.
+- _Queue clear — the rail/shortcuts plan (9a–9d) is shipped. See B/C for remaining work._
 
 ## B. Major unbuilt features (from the original browser spec)
 
@@ -53,6 +52,12 @@
   converts in seconds; the seed protects meanwhile. Cosmetic only.
 
 ## Recently completed (short-term context; pruned over time)
+
+- ✓ **9b2 — shortcut editing.** Each row on the shortcuts page records a new combo (click the combo →
+  capture via a focused NSView that grabs the keystroke before the menu). Writes go to the 9a
+  override layer, so the menu/key handlers update live and persist across relaunch. Validates:
+  requires a ⌘/⌃/⌥ modifier, rejects reserved system combos (⌘Q/⌘W/⌘H/⌘Tab/⌘Space) and conflicts
+  (names the holder; no silent double-bind). Per-row reset-to-default + global "Reset All".
 
 - ✓ **9d — Drag-to-reorder rail icons.** The five internal-surface icons (history, downloads,
   trusted, shortcuts, new-tab) reorder by drag via `RailSurface` + a live `DropDelegate`; order
