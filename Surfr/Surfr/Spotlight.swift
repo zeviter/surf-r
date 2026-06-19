@@ -103,43 +103,87 @@ struct SpotlightOmnibox: View {
         s.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    /// Recent history → bookmarks → search (DuckDuckGo row always last). Basic
-    /// recency + substring ranking; capped at 8 rows.
+    /// Build ranked suggestions. With no query: most-recent history, recency order.
+    /// With a query: blend history + bookmarks by `rankScore` (match quality + visit
+    /// frequency + a bookmark boost), keep the recent-history → bookmarks ordering as
+    /// the tie-break, dedupe by URL, cap at 7, then append the DuckDuckGo search row
+    /// last. Total capped at 8.
     static func loadSuggestions(for raw: String) async -> [Suggestion] {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        var out: [Suggestion] = []
-        var seen = Set<String>()
-        func add(_ s: Suggestion) {
-            guard seen.insert(s.url.absoluteString).inserted else { return }
-            out.append(s)
-        }
 
         if query.isEmpty {
-            for h in await HistoryStore.shared.recent(limit: 6) {
-                if let u = URL(string: h.url) {
-                    add(Suggestion(source: .history, title: h.title, subtitle: h.url, url: u))
-                }
+            var out: [Suggestion] = []
+            var seen = Set<String>()
+            for h in await HistoryStore.shared.recent(limit: 8) {
+                guard let u = URL(string: h.url), seen.insert(u.absoluteString).inserted else { continue }
+                out.append(Suggestion(source: .history, title: h.title, subtitle: h.url, url: u))
             }
-        } else {
-            for h in await HistoryStore.shared.search(query: query, limit: 5) {
-                if let u = URL(string: h.url) {
-                    add(Suggestion(source: .history, title: h.title, subtitle: h.url, url: u))
-                }
-            }
-            for b in await BookmarkStore.shared.search(query: query) {
-                if let u = URL(string: b.url) {
-                    add(Suggestion(source: .bookmark, title: b.title, subtitle: b.url, url: u))
-                }
-            }
+            return Array(out.prefix(8))
         }
 
-        var result = Array(out.prefix(7))
-        if !query.isEmpty, let searchURL = Omnibox.searchURL(for: collapse(raw)) {
+        // Score a pool of candidates. `order` preserves source/recency order so
+        // equal scores fall back to "recent history before bookmarks".
+        struct Scored { let suggestion: Suggestion; let score: Int; let order: Int }
+        var scored: [Scored] = []
+        var order = 0
+        let q = query.lowercased()
+
+        for h in await HistoryStore.shared.search(query: query, limit: 10) {
+            guard let u = URL(string: h.url) else { continue }
+            let s = rankScore(title: h.title, urlString: h.url, host: u.host,
+                              visitCount: h.visitCount, isBookmark: false, query: q)
+            scored.append(Scored(suggestion: Suggestion(source: .history, title: h.title, subtitle: h.url, url: u),
+                                 score: s, order: order)); order += 1
+        }
+        for b in await BookmarkStore.shared.search(query: query) {
+            guard let u = URL(string: b.url) else { continue }
+            let s = rankScore(title: b.title, urlString: b.url, host: u.host,
+                              visitCount: 0, isBookmark: true, query: q)
+            scored.append(Scored(suggestion: Suggestion(source: .bookmark, title: b.title, subtitle: b.url, url: u),
+                                 score: s, order: order)); order += 1
+        }
+
+        scored.sort { $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order }
+
+        // Dedupe by URL (keep the highest-scored occurrence), cap at 7.
+        var seen = Set<String>()
+        var result: [Suggestion] = []
+        for item in scored {
+            guard seen.insert(item.suggestion.url.absoluteString).inserted else { continue }
+            result.append(item.suggestion)
+            if result.count == 7 { break }
+        }
+
+        if let searchURL = Omnibox.searchURL(for: collapse(raw)) {
             result.append(Suggestion(source: .search,
                                      title: "Search DuckDuckGo for “\(query)”",
                                      subtitle: "", url: searchURL))
         }
         return Array(result.prefix(8))
+    }
+
+    /// Relevance score for a candidate (higher = better). Predictable blend:
+    ///  • match quality — exact/`www.` host (120), host prefix (100), title prefix
+    ///    (80), host contains (50), title contains (30), URL contains (10);
+    ///  • visit frequency — `min(visitCount, 20) * 2` (0…40), so often-visited pages
+    ///    rise;
+    ///  • bookmark boost — +25, so a saved page outranks an equally-matching plain
+    ///    history hit.
+    static func rankScore(title: String, urlString: String, host: String?,
+                          visitCount: Int, isBookmark: Bool, query q: String) -> Int {
+        let t = title.lowercased()
+        let h = (host ?? "").lowercased()
+        let u = urlString.lowercased()
+        var s = 0
+        if h == q || h == "www.\(q)" { s += 120 }
+        else if h.hasPrefix(q) { s += 100 }
+        else if t.hasPrefix(q) { s += 80 }
+        else if h.contains(q) { s += 50 }
+        else if t.contains(q) { s += 30 }
+        else if u.contains(q) { s += 10 }
+        s += min(visitCount, 20) * 2
+        if isBookmark { s += 25 }
+        return s
     }
 }
 
