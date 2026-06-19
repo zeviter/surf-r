@@ -11,8 +11,6 @@
 
 - ☐ **9b2 — shortcut editing** (remap with conflict + reserved-key detection, reset-to-default) —
   deferred; the override layer built in 9a supports it.
-- ☐ **9d — Drag-to-rearrange rail order** (with persistence). Deferred as its own slice — drag
-  interaction + saved ordering is fiddlier than it looks.
 
 ## B. Major unbuilt features (from the original browser spec)
 
@@ -55,6 +53,12 @@
   converts in seconds; the seed protects meanwhile. Cosmetic only.
 
 ## Recently completed (short-term context; pruned over time)
+
+- ✓ **9d — Drag-to-reorder rail icons.** The five internal-surface icons (history, downloads,
+  trusted, shortcuts, new-tab) reorder by drag via `RailSurface` + a live `DropDelegate`; order
+  persists in UserDefaults (`SurfrRailSurfaceOrder`), reconciled against `allCases`. Default stays
+  history → downloads → trusted → shortcuts → new tab. Favicon host tiles are unaffected; active-
+  green/badges/popovers/clicks preserved.
 
 - ✓ **Exact registrable domains via swift-psl.** Linked the `PublicSuffixList` product;
   `TrustStore.registrableDomain` now uses `effectiveTLDPlusOne` (full PSL), with the old heuristic

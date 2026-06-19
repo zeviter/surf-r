@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import Combine
 import AppKit
+import UniformTypeIdentifiers
 
 extension Notification.Name {
     /// Posted by the ⌘L menu command to focus the address bar.
@@ -968,6 +969,60 @@ struct FaviconTile: View {
 
 /// The 48px left rail (ui-wireframes §1): history + new-tab pinned at the top,
 /// then the scrolling, host-grouped favicon stack. Replaces the old top tab bar.
+/// The fixed internal-surface rail icons (9d). Their order is user-reorderable by
+/// drag and persisted; the default (declaration) order is history → downloads →
+/// trusted → shortcuts → new tab. The dynamic favicon host tiles below are NOT part
+/// of this — they keep their host-creation order.
+enum RailSurface: String, CaseIterable, Identifiable, Codable {
+    case history, downloads, trusted, shortcuts, newTab
+    var id: String { rawValue }
+
+    /// SF Symbol for the floating drag preview (matches each icon's glyph).
+    var symbol: String {
+        switch self {
+        case .history: return "clock"
+        case .downloads: return "arrow.down.circle"
+        case .trusted: return "checkmark.shield"
+        case .shortcuts: return "keyboard"
+        case .newTab: return "plus"
+        }
+    }
+}
+
+/// Live reorder: as the dragged surface hovers over `item`, move it there (animated
+/// snap). The drop just clears the drag state and persists. The payload isn't read —
+/// `dragging` carries identity — so this is robust regardless of provider contents.
+private struct RailReorderDropDelegate: DropDelegate {
+    let item: RailSurface
+    @Binding var order: [RailSurface]
+    @Binding var dragging: RailSurface?
+    let onReorder: () -> Void
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func dropEntered(info: DropInfo) {
+        guard let dragging, dragging != item,
+              let from = order.firstIndex(of: dragging),
+              let to = order.firstIndex(of: item) else { return }
+        withAnimation(.easeInOut(duration: 0.18)) {
+            order.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        }
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragging = nil
+        onReorder()
+        return true
+    }
+}
+
+/// Catch-all so dropping anywhere else on the rail ends the drag cleanly (clears the
+/// dimmed source) instead of leaving stale drag state.
+private struct RailEndDropDelegate: DropDelegate {
+    @Binding var dragging: RailSurface?
+    func performDrop(info: DropInfo) -> Bool { dragging = nil; return false }
+}
+
 struct RailView: View {
     @ObservedObject var browser: BrowserState
     /// Host whose tab flyout is currently open (nil = none). UI-only state.
@@ -976,49 +1031,32 @@ struct RailView: View {
     @State private var showDownloads = false
     /// Whether the shortcuts cheatsheet popover is open. UI-only state.
     @State private var showShortcuts = false
+    /// User-chosen order of the internal-surface icons (9d), loaded from + saved to
+    /// UserDefaults. Missing/unknown entries are reconciled against `allCases`.
+    @State private var surfaceOrder: [RailSurface] = RailView.loadOrder()
+    /// The surface currently being dragged (drives the dim + reorder logic).
+    @State private var dragging: RailSurface?
 
-    /// Default pinned order (slice 9a): history → downloads → trusted → new tab.
+    private static let orderKey = "SurfrRailSurfaceOrder"
+
     var body: some View {
         VStack(spacing: 8) {
-            // History — opens the full-page history view (§7). Green when active.
-            railIconButton("clock", help: "History", isActive: browser.activeTab.kind == .history,
-                           action: browser.openHistoryPage)
-
-            // Downloads — icon opens the popover (recent + live progress); the
-            // popover's "See all" / ⌘⇧J open the full page. Keeps its progress-ring /
-            // count / completed states, plus the 9a active-green when the page is up.
-            DownloadsRailIcon(isActive: browser.activeTab.kind == .downloads) {
-                showDownloads = true
-                DownloadManager.shared.acknowledge()   // opening clears the green state
-            }
-            .popover(isPresented: $showDownloads, arrowEdge: .trailing) {
-                DownloadsPopover {
-                    showDownloads = false
-                    browser.openDownloadsPage()
-                }
-            }
-
-            // Trusted Sites — opens the trusted-sites page (§8). Green when active.
-            railIconButton("checkmark.shield", help: "Trusted Sites",
-                           isActive: browser.activeTab.kind == .trustedSites,
-                           action: browser.openTrustedSitesPage)
-
-            // Shortcuts — opens a cheatsheet popover (9b); green when the shortcuts
-            // page is the active surface. The popover's "See all" / ⌘/ open the page.
-            railIconButton("keyboard", help: "Keyboard Shortcuts",
-                           isActive: browser.activeTab.kind == .shortcuts,
-                           action: { showShortcuts = true })
-                .popover(isPresented: $showShortcuts, arrowEdge: .trailing) {
-                    ShortcutsCheatsheet {
-                        showShortcuts = false
-                        browser.openShortcutsPage()
+            // Internal-surface icons — drag to reorder (9d); order persists.
+            ForEach(surfaceOrder) { surface in
+                surfaceIcon(surface)
+                    .opacity(dragging == surface ? 0.45 : 1)
+                    .onDrag {
+                        dragging = surface
+                        return NSItemProvider(object: surface.rawValue as NSString)
+                    } preview: {
+                        // A plain glyph as the floating drag image (clear affordance).
+                        Image(systemName: surface.symbol)
+                            .font(.system(size: 16))
+                            .frame(width: 32, height: 28)
                     }
-                }
-
-            // New tab — same behaviour as ⌘T. Green while the new-tab page is active.
-            railIconButton("plus", help: "New Tab (⌘T)",
-                           isActive: browser.activeTab.kind == .web && !browser.activeTab.hasNavigated,
-                           action: browser.newTab)
+                    .onDrop(of: [.text], delegate: RailReorderDropDelegate(
+                        item: surface, order: $surfaceOrder, dragging: $dragging, onReorder: persistOrder))
+            }
 
             Divider().frame(width: 30)
 
@@ -1057,6 +1095,68 @@ struct RailView: View {
             // If the flyout's host disappeared (its last tab closed), drop the stale state.
             if let open = flyoutHost, !hosts.contains(open) { flyoutHost = nil }
         }
+        // Dropping on the rail's non-icon space ends a reorder drag cleanly.
+        .onDrop(of: [.text], delegate: RailEndDropDelegate(dragging: $dragging))
+    }
+
+    /// Render one internal-surface icon with its full behaviour (active-green,
+    /// popovers, badges, click). Order/drag is applied by the caller.
+    @ViewBuilder private func surfaceIcon(_ surface: RailSurface) -> some View {
+        switch surface {
+        case .history:
+            railIconButton("clock", help: "History",
+                           isActive: browser.activeTab.kind == .history,
+                           action: browser.openHistoryPage)
+        case .downloads:
+            // Icon opens the popover (recent + live progress); "See all" / ⌘⇧J open
+            // the page. Keeps its ring / count / completed states + 9a active-green.
+            DownloadsRailIcon(isActive: browser.activeTab.kind == .downloads) {
+                showDownloads = true
+                DownloadManager.shared.acknowledge()
+            }
+            .popover(isPresented: $showDownloads, arrowEdge: .trailing) {
+                DownloadsPopover {
+                    showDownloads = false
+                    browser.openDownloadsPage()
+                }
+            }
+        case .trusted:
+            railIconButton("checkmark.shield", help: "Trusted Sites",
+                           isActive: browser.activeTab.kind == .trustedSites,
+                           action: browser.openTrustedSitesPage)
+        case .shortcuts:
+            railIconButton("keyboard", help: "Keyboard Shortcuts",
+                           isActive: browser.activeTab.kind == .shortcuts,
+                           action: { showShortcuts = true })
+                .popover(isPresented: $showShortcuts, arrowEdge: .trailing) {
+                    ShortcutsCheatsheet {
+                        showShortcuts = false
+                        browser.openShortcutsPage()
+                    }
+                }
+        case .newTab:
+            railIconButton("plus", help: "New Tab (⌘T)",
+                           isActive: browser.activeTab.kind == .web && !browser.activeTab.hasNavigated,
+                           action: browser.newTab)
+        }
+    }
+
+    // MARK: - Order persistence (9d)
+
+    /// Load the saved order, reconciled against `allCases`: unknown entries dropped,
+    /// missing ones appended in default order (so a fresh install / a newly-added
+    /// surface yields the default history → downloads → trusted → shortcuts → new tab).
+    private static func loadOrder() -> [RailSurface] {
+        let saved = (UserDefaults.standard.stringArray(forKey: orderKey) ?? [])
+            .compactMap { RailSurface(rawValue: $0) }
+        var result: [RailSurface] = []
+        for s in saved where !result.contains(s) { result.append(s) }
+        for s in RailSurface.allCases where !result.contains(s) { result.append(s) }
+        return result
+    }
+
+    private func persistOrder() {
+        UserDefaults.standard.set(surfaceOrder.map(\.rawValue), forKey: Self.orderKey)
     }
 
     /// A pinned rail icon button. `isActive` tints it green (reusing the trusted/
