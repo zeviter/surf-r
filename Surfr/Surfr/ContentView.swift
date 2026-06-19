@@ -65,6 +65,9 @@ final class Tab: ObservableObject, Identifiable {
     /// is bound at the start of a chain; mid-chain redirects must NOT rebind, so a
     /// single login flow stays in one store (see the navigation delegate).
     var navigationChainInFlight = false
+    /// Set to the original `http://` URL while an HTTPS upgrade is in flight; if that
+    /// secure load fails the delegate shows the insecure-site interstitial for it.
+    var httpsUpgradeOriginal: URL?
 
     @Published var title: String
     @Published var addressText: String
@@ -157,6 +160,8 @@ final class Tab: ObservableObject, Identifiable {
         #endif
         webView.allowsBackForwardNavigationGestures = true
         ContentBlocker.shared.apply(to: webView)
+        // HTTPS-only: the interstitial's "continue insecurely" button posts here.
+        webView.configuration.userContentController.add(HTTPSUpgrader.shared, name: HTTPSUpgrader.messageName)
 
         observations = []
         observations.append(webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
@@ -598,6 +603,19 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
            navigationAction.targetFrame?.isMainFrame == true,
            let url = navigationAction.request.url,
            let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+
+            // HTTPS-only (Stage-1): upgrade http → https before anything else. We
+            // preserve the request (method/body) so a form POST isn't downgraded to
+            // a GET, then re-enter with the secure URL (idempotent — won't loop).
+            if scheme == "http", HTTPSUpgrader.shared.shouldUpgrade(url) {
+                var secure = navigationAction.request
+                secure.url = HTTPSUpgrader.secureURL(url)
+                decisionHandler(.cancel)
+                tab.httpsUpgradeOriginal = url   // remembered so a failure shows the interstitial
+                webView.load(secure)
+                return
+            }
+
             let wantPersistent = TrustStore.shared.isTrusted(host: url.host)
             // Redirect-chain guard (slice C): a `.other` navigation while a chain is
             // already in flight is a redirect hop (e.g. an OAuth 302). Do NOT rebind
@@ -624,7 +642,21 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView,
                  didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        browser?.tab(for: webView)?.navigationChainInFlight = false
+        let tab = browser?.tab(for: webView)
+        tab?.navigationChainInFlight = false
+
+        // HTTPS-only: if the secure load we forced just failed, show the insecure-site
+        // interstitial for the original http URL (never a silent http fallback).
+        if let tab, let original = tab.httpsUpgradeOriginal {
+            tab.httpsUpgradeOriginal = nil
+            let failingHost = ((error as NSError).userInfo[NSURLErrorFailingURLStringErrorKey] as? String)
+                .flatMap(URL.init(string:))?.host?.lowercased()
+            let secureHost = HTTPSUpgrader.secureURL(original).host?.lowercased()
+            // Only intercept the upgrade's own failure (not an unrelated nav).
+            if failingHost == nil || failingHost == secureHost {
+                webView.loadHTMLString(HTTPSUpgrader.interstitialHTML(httpURL: original), baseURL: nil)
+            }
+        }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -649,6 +681,7 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
         // The redirect chain has settled.
         let tab = browser?.tab(for: webView)
         tab?.navigationChainInFlight = false
+        tab?.httpsUpgradeOriginal = nil   // HTTPS upgrade succeeded (or unrelated finish)
 
         // Skip blank/new-tab/about:blank and non-web schemes; record real pages only.
         guard let url = webView.url,
