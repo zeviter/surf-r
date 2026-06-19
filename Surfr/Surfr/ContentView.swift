@@ -1544,17 +1544,28 @@ struct ContentView: View {
         .modifier(BrowserCommandHandlers(browser: browser))
     }
 
-    // MARK: - Addition 3: mouse side-button back/forward
+    // MARK: - App-level back/forward input (mouse side buttons + ⌘[ / ⌘] aliases)
 
-    /// Catch mouse side-button releases at the app level (a local NSEvent monitor),
-    /// so they drive the active tab's history regardless of which view holds focus.
-    /// macOS numbers side buttons 3 (back) and 4 (forward); standard mice map their
-    /// extra buttons there. Only navigates when the web view can; consumes the event
-    /// (returns nil) when it does, otherwise passes it through unchanged.
+    /// Catch back/forward inputs at the app level (a local NSEvent monitor), so they
+    /// drive the active tab's history regardless of which view holds focus:
+    ///   • mouse side buttons — macOS numbers them 3 (back) / 4 (forward);
+    ///   • ⌘[ / ⌘] — always-on keyboard aliases for back/forward. The *primary*
+    ///     bindings are ⌘← / ⌘→ (registry-driven menu items, user-editable); ⌘[ / ⌘]
+    ///     are hard-wired here, not editable and not shown as separate rows.
+    /// Only navigates when possible; consumes the event (returns nil) when it does,
+    /// otherwise passes it through unchanged.
     private func installMouseNavMonitor() {
         guard mouseNavMonitor == nil else { return }
-        mouseNavMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp]) { event in
+        mouseNavMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp, .keyDown]) { event in
             let webView = browser.activeTab.webView
+            if event.type == .keyDown {
+                // Plain ⌘ + bracket only (⌘⇧[ etc. are left alone).
+                guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+                      let ch = event.charactersIgnoringModifiers else { return event }
+                if ch == "[", webView.canGoBack { webView.goBack(); return nil }
+                if ch == "]", webView.canGoForward { webView.goForward(); return nil }
+                return event
+            }
             switch event.buttonNumber {
             case 3:
                 if webView.canGoBack { webView.goBack(); return nil }

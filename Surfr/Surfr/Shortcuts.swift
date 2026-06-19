@@ -48,21 +48,58 @@ struct ShortcutModifiers: OptionSet, Codable, Equatable {
 }
 
 /// A key + modifiers. Persisted (Codable) for user overrides; resolves to a
-/// SwiftUI `KeyEquivalent`/`EventModifiers` for the menu bar.
+/// SwiftUI `KeyEquivalent`/`EventModifiers` for the menu bar. `key` is a single
+/// character; special keys use the AppKit function-key code points (e.g. the
+/// left arrow is `\u{F702}`), which is also what `charactersIgnoringModifiers`
+/// reports when capturing, so capture/store/display stay consistent.
 struct KeyCombo: Equatable, Codable {
-    var key: String   // single character, e.g. "t", "[", "/"
+    var key: String
     var modifiers: ShortcutModifiers
 
-    var keyEquivalent: KeyEquivalent { KeyEquivalent(Character(key)) }
+    /// SwiftUI key for the menu bar — special keys map to the named constants so
+    /// arrows/return/tab/etc. register correctly.
+    var keyEquivalent: KeyEquivalent {
+        switch key {
+        case "\u{F700}": return .upArrow
+        case "\u{F701}": return .downArrow
+        case "\u{F702}": return .leftArrow
+        case "\u{F703}": return .rightArrow
+        case "\r", "\u{D}": return .return
+        case "\u{1B}": return .escape
+        case "\t", "\u{9}": return .tab
+        case " ": return .space
+        case "\u{7F}": return .delete
+        default: return KeyEquivalent(Character(key))
+        }
+    }
 
-    /// Human-readable, e.g. "⌘T", "⌘⌥R", "⌘/".
-    var display: String { modifiers.symbols + key.uppercased() }
+    /// Human-readable, e.g. "⌘T", "⌘⌥R", "⌘←".
+    var display: String { modifiers.symbols + keyLabel }
+
+    /// Glyph for the base key: special keys → symbols, else the uppercased char.
+    var keyLabel: String {
+        switch key {
+        case "\u{F700}": return "↑"
+        case "\u{F701}": return "↓"
+        case "\u{F702}": return "←"
+        case "\u{F703}": return "→"
+        case "\r", "\u{D}": return "↵"   // return / enter
+        case "\u{1B}": return "⎋"        // escape
+        case "\t", "\u{9}": return "⇥"   // tab
+        case " ": return "␣"             // space
+        case "\u{7F}": return "⌫"        // delete (backspace)
+        case "\u{F728}": return "⌦"      // forward delete
+        default: return key.uppercased()
+        }
+    }
 }
 
-/// One shortcut's identity, label, category, and factory-default combo.
+/// One shortcut's identity, label, one-line description, category, and factory
+/// default combo.
 struct ShortcutDefinition: Identifiable {
     let id: ShortcutID
     let name: String
+    let detail: String
     let category: ShortcutCategory
     let defaultCombo: KeyCombo
 }
@@ -158,26 +195,45 @@ final class ShortcutRegistry: ObservableObject {
         KeyCombo(key: key, modifiers: mods)
     }
 
+    // Special-key code points used by default combos / aliases.
+    private static let leftArrow = "\u{F702}"
+    private static let rightArrow = "\u{F703}"
+
     private static let defaults: [ShortcutDefinition] = [
         // Tabs
-        .init(id: .newTab,           name: "New Tab",                    category: .tabs,       defaultCombo: c("t", [.command])),
-        .init(id: .closeTab,         name: "Close Tab",                  category: .tabs,       defaultCombo: c("w", [.command])),
-        .init(id: .closeWindow,      name: "Close Window",               category: .tabs,       defaultCombo: c("w", [.command, .shift])),
+        .init(id: .newTab,           name: "New Tab",                     detail: "Open a new tab",
+              category: .tabs,       defaultCombo: c("t", [.command])),
+        .init(id: .closeTab,         name: "Close Tab",                   detail: "Close the current tab",
+              category: .tabs,       defaultCombo: c("w", [.command])),
+        .init(id: .closeWindow,      name: "Close Window",                detail: "Close the current window",
+              category: .tabs,       defaultCombo: c("w", [.command, .shift])),
         // Navigation
-        .init(id: .openLocation,     name: "Open Location…",             category: .navigation, defaultCombo: c("l", [.command])),
-        .init(id: .reload,           name: "Reload Page",                category: .navigation, defaultCombo: c("r", [.command])),
-        .init(id: .hardReload,       name: "Hard Reload (Bypass Cache)", category: .navigation, defaultCombo: c("r", [.command, .shift])),
-        .init(id: .emptyCacheReload, name: "Empty Cache and Hard Reload",category: .navigation, defaultCombo: c("r", [.command, .option])),
-        .init(id: .back,             name: "Back",                       category: .navigation, defaultCombo: c("[", [.command])),
-        .init(id: .forward,          name: "Forward",                    category: .navigation, defaultCombo: c("]", [.command])),
+        .init(id: .openLocation,     name: "Open Omnibox",                detail: "Focus the address bar to type a URL or search",
+              category: .navigation, defaultCombo: c("l", [.command])),
+        .init(id: .reload,           name: "Reload Page",                 detail: "Reload the current page",
+              category: .navigation, defaultCombo: c("r", [.command])),
+        .init(id: .hardReload,       name: "Hard Reload (Bypass Cache)",  detail: "Reload, ignoring the cache",
+              category: .navigation, defaultCombo: c("r", [.command, .shift])),
+        .init(id: .emptyCacheReload, name: "Empty Cache and Hard Reload", detail: "Clear the page's cache and reload from scratch",
+              category: .navigation, defaultCombo: c("r", [.command, .option])),
+        .init(id: .back,             name: "Back",                        detail: "Go back to the previous page (also ⌘[)",
+              category: .navigation, defaultCombo: c(leftArrow, [.command])),
+        .init(id: .forward,          name: "Forward",                     detail: "Go forward to the next page (also ⌘])",
+              category: .navigation, defaultCombo: c(rightArrow, [.command])),
         // Page actions
-        .init(id: .bookmark,         name: "Bookmark Page",              category: .page,       defaultCombo: c("d", [.command])),
-        .init(id: .trustSite,        name: "Trust This Site",            category: .page,       defaultCombo: c("t", [.command, .shift])),
+        .init(id: .bookmark,         name: "Bookmark Page",               detail: "Bookmark or unbookmark the current page",
+              category: .page,       defaultCombo: c("d", [.command])),
+        .init(id: .trustSite,        name: "Trust / Untrust Site",        detail: "Toggle whether this site stays logged in across sessions",
+              category: .page,       defaultCombo: c("t", [.command, .shift])),
         // Surfaces (internal pages)
-        .init(id: .history,          name: "History",                    category: .surfaces,   defaultCombo: c("y", [.command])),
-        .init(id: .trustedSites,     name: "Trusted Sites",              category: .surfaces,   defaultCombo: c("y", [.command, .shift])),
-        .init(id: .downloads,        name: "Downloads",                  category: .surfaces,   defaultCombo: c("j", [.command, .shift])),
-        .init(id: .shortcuts,        name: "Keyboard Shortcuts",         category: .surfaces,   defaultCombo: c("/", [.command])),
+        .init(id: .history,          name: "History",                     detail: "Open the history page",
+              category: .surfaces,   defaultCombo: c("y", [.command])),
+        .init(id: .trustedSites,     name: "Trusted Sites",               detail: "Open the trusted-sites page",
+              category: .surfaces,   defaultCombo: c("y", [.command, .shift])),
+        .init(id: .downloads,        name: "Downloads",                   detail: "Open the downloads page",
+              category: .surfaces,   defaultCombo: c("j", [.command, .shift])),
+        .init(id: .shortcuts,        name: "Keyboard Shortcuts",          detail: "Open this keyboard-shortcuts page",
+              category: .surfaces,   defaultCombo: c("/", [.command])),
     ]
 
     private static let reserved: [KeyCombo] = [
@@ -188,6 +244,8 @@ final class ShortcutRegistry: ObservableObject {
         c("m", [.command]),            // Minimize
         c("\t", [.command]),           // ⌘Tab — app switcher (system-intercepted)
         c(" ", [.command]),            // ⌘Space — Spotlight (system-intercepted)
+        c("[", [.command]),            // hard-wired Back alias (not editable)
+        c("]", [.command]),            // hard-wired Forward alias (not editable)
     ]
 }
 

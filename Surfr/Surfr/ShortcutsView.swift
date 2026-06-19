@@ -19,7 +19,8 @@ struct KeyCapsView: View {
         }
     }
 
-    /// One cap per modifier (canonical order) then the key.
+    /// One cap per modifier (canonical order) then the key glyph (arrows/return/etc.
+    /// render as symbols via `keyLabel`, not the raw control character).
     private var caps: [String] {
         var result: [String] = []
         let m = combo.modifiers
@@ -27,7 +28,7 @@ struct KeyCapsView: View {
         if m.contains(.option)  { result.append("⌥") }
         if m.contains(.shift)   { result.append("⇧") }
         if m.contains(.command) { result.append("⌘") }
-        result.append(combo.key.uppercased())
+        result.append(combo.keyLabel)
         return result
     }
 }
@@ -148,6 +149,8 @@ struct ShortcutRow: View {
                 Text(definition.name).lineLimit(1)
                 if let message {
                     Text(message).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+                } else {
+                    Text(definition.detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

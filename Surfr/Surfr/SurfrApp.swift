@@ -55,7 +55,7 @@ struct SurfrApp: App {
 
                 Divider()
 
-                Button("Open Location…") {
+                Button("Open Omnibox") {
                     NotificationCenter.default.post(name: .focusOmnibox, object: nil)
                 }
                 .appShortcut(.openLocation, shortcuts)
