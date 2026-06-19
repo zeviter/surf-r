@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		AA01000000000000000000A3 /* ContentBlockerConverter in Frameworks */ = {isa = PBXBuildFile; productRef = AA01000000000000000000A2 /* ContentBlockerConverter */; };
 		AA01000000000000000000B3 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = AA01000000000000000000B2 /* GRDB */; };
+		AA01000000000000000000C3 /* PublicSuffixList in Frameworks */ = {isa = PBXBuildFile; productRef = AA01000000000000000000C2 /* PublicSuffixList */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +31,7 @@
 			files = (
 				AA01000000000000000000A3 /* ContentBlockerConverter in Frameworks */,
 				AA01000000000000000000B3 /* GRDB in Frameworks */,
+				AA01000000000000000000C3 /* PublicSuffixList in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -74,6 +76,7 @@
 			packageProductDependencies = (
 				AA01000000000000000000A2 /* ContentBlockerConverter */,
 				AA01000000000000000000B2 /* GRDB */,
+				AA01000000000000000000C2 /* PublicSuffixList */,
 			);
 			productName = Surfr;
 			productReference = 00458F262FE4558900320D64 /* Surfr.app */;
@@ -106,6 +109,7 @@
 			packageReferences = (
 				AA01000000000000000000A1 /* XCRemoteSwiftPackageReference "SafariConverterLib" */,
 				AA01000000000000000000B1 /* XCRemoteSwiftPackageReference "GRDB" */,
+				AA01000000000000000000C1 /* XCRemoteSwiftPackageReference "swift-psl" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 00458F272FE4558900320D64 /* Products */;
@@ -378,6 +382,14 @@
 				minimumVersion = 7.11.1;
 			};
 		};
+		AA01000000000000000000C1 /* XCRemoteSwiftPackageReference "swift-psl" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ameshkov/swift-psl";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.1.145;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -390,6 +402,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA01000000000000000000B1 /* XCRemoteSwiftPackageReference "GRDB" */;
 			productName = GRDB;
+		};
+		AA01000000000000000000C2 /* PublicSuffixList */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA01000000000000000000C1 /* XCRemoteSwiftPackageReference "swift-psl" */;
+			productName = PublicSuffixList;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

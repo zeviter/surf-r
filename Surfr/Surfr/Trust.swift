@@ -1,6 +1,7 @@
 import Foundation
 import WebKit
 import Combine
+import PublicSuffixList
 
 /// Persistent allowlist of *trusted registrable domains* for the hybrid session
 /// model (slice C1). Trusted domains share the single persistent
@@ -137,19 +138,28 @@ final class TrustStore: ObservableObject {
 
     // MARK: - Registrable domain (pragmatic eTLD+1)
 
-    /// Best-effort registrable domain (eTLD+1). Handles the common multi-label
-    /// public suffixes (e.g. `co.uk`) via a small embedded set; otherwise takes
-    /// the last two labels.
+    /// Registrable domain (eTLD+1), resolved against the full Public Suffix List via
+    /// `swift-psl`, so unusual multi-label TLDs (e.g. `*.compute.amazonaws.com`,
+    /// `foo.github.io`, `example.co.uk`) are handled correctly.
     ///
-    /// NOTE: this is **not** the full Public Suffix List. The project's
-    /// `swift-psl` is only a transitive dependency (not linked to the app target),
-    /// so a later slice can link it and swap this out for complete coverage.
-    /// Subdomain matching (`isTrusted`) tolerates imperfect derivation because it
-    /// matches the stored domain and any subdomain of it.
+    /// Falls back to the pragmatic eTLD+1 heuristic when PSL can't produce a result
+    /// — e.g. the host is itself a public suffix, has too few labels, or is an IP /
+    /// single-label name. The fallback preserves the prior behaviour for those
+    /// edge cases, and ordinary registrable domains (`google.com` → `google.com`)
+    /// resolve identically under both, so existing trusted entries still match.
     static func registrableDomain(for host: String) -> String {
         let h = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
-        let labels = h.split(separator: ".").map(String.init)
-        guard labels.count > 2 else { return h }
+        if let etldPlusOne = PublicSuffixList.effectiveTLDPlusOne(h), !etldPlusOne.isEmpty {
+            return etldPlusOne
+        }
+        return heuristicRegistrableDomain(h)
+    }
+
+    /// Pre-PSL fallback: common multi-label suffixes via a small embedded set, else
+    /// the last two labels.
+    private static func heuristicRegistrableDomain(_ host: String) -> String {
+        let labels = host.split(separator: ".").map(String.init)
+        guard labels.count > 2 else { return host }
         let lastTwo = labels.suffix(2).joined(separator: ".")
         if multiLabelSuffixes.contains(lastTwo) {
             return labels.suffix(3).joined(separator: ".")
