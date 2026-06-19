@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 // MARK: - Suggestions
 
@@ -307,6 +308,8 @@ struct SpotlightOverlay: View {
 /// (pristine rule) and is preserved.
 struct NewTabPage: View {
     @ObservedObject var tab: Tab
+    /// Live bookmark records for the grid (slice 6); empty → nothing below the box.
+    @ObservedObject private var bookmarkState = BookmarkState.shared
     let onNavigate: (URL, Bool) -> Void
     let focusToken: Int
 
@@ -324,9 +327,126 @@ struct NewTabPage: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.gray.opacity(0.2)))
             .shadow(color: .black.opacity(0.1), radius: 12, y: 4)
-            Spacer()
+
+            // §6: bookmarks grid below the box. Empty → just the box (no grid,
+            // no placeholder), so keep the box near the top with a plain Spacer.
+            if bookmarkState.bookmarks.isEmpty {
+                Spacer()
+            } else {
+                BookmarksGrid(bookmarks: bookmarkState.bookmarks, onOpen: onNavigate)
+                    .padding(.top, 28)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
+    }
+}
+
+/// The new-tab bookmarks grid (§6): responsive favicon + label tiles below the
+/// omnibox box. Pure render of the supplied records; `NewTabPage` owns liveness.
+struct BookmarksGrid: View {
+    let bookmarks: [Bookmark]
+    /// `(url, newTab)` — same closure the omnibox uses; ⌘-click opens in a new tab.
+    let onOpen: (URL, Bool) -> Void
+
+    private let columns = [GridItem(.adaptive(minimum: 92, maximum: 120), spacing: 18)]
+
+    var body: some View {
+        ScrollView {
+            LazyVGrid(columns: columns, alignment: .center, spacing: 18) {
+                ForEach(bookmarks) { bookmark in
+                    BookmarkTile(bookmark: bookmark, onOpen: onOpen)
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.bottom, 24)
+            .frame(maxWidth: 760)
+            .frame(maxWidth: .infinity)   // center the grid in the content area
+        }
+        .frame(maxHeight: .infinity)
+    }
+}
+
+/// One bookmark tile: favicon (FaviconService, letter-tile fallback like the rail)
+/// + title/host label. Click navigates the current tab; ⌘-click opens a new tab;
+/// right-click → "Remove bookmark". Loads/swaps its favicon like `FaviconTile`.
+struct BookmarkTile: View {
+    let bookmark: Bookmark
+    let onOpen: (URL, Bool) -> Void
+
+    @State private var iconData: Data?
+    /// Observe trust so the badge appears/disappears live on trust/untrust.
+    @ObservedObject private var trustStore = TrustStore.shared
+
+    private var label: String { bookmark.title.isEmpty ? bookmark.host : bookmark.title }
+
+    var body: some View {
+        Button(action: open) {
+            VStack(spacing: 6) {
+                iconContent
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    // Trusted check in the top-right corner, inset inside the icon so
+                    // it isn't clipped — matches the rail tile's badge placement.
+                    .overlay(alignment: .topTrailing) {
+                        if trustStore.isTrusted(host: bookmark.host) {
+                            TrustedBadge().offset(x: -2, y: 2)
+                        }
+                    }
+                Text(label)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity)
+            }
+            .frame(width: 92)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(label)
+        .contextMenu {
+            Button("Remove bookmark", role: .destructive) {
+                Task { await BookmarkState.shared.remove(bookmark) }
+            }
+        }
+        .task(id: bookmark.host) { await loadIcon() }
+        .onReceive(NotificationCenter.default.publisher(for: .faviconUpdated).receive(on: RunLoop.main)) { note in
+            // A favicon was cached after this tile rendered — swap it in, this tile only.
+            guard (note.userInfo?["host"] as? String)?.lowercased() == bookmark.host.lowercased() else { return }
+            if let data = FaviconService.shared.cachedFaviconData(forHost: bookmark.host) {
+                iconData = data
+            }
+        }
+    }
+
+    /// Real favicon if we have usable bytes, else the shared letter-tile fallback.
+    @ViewBuilder private var iconContent: some View {
+        if let data = iconData ?? FaviconService.shared.cachedFaviconData(forHost: bookmark.host),
+           let image = NSImage(data: data) {
+            Image(nsImage: image).resizable().scaledToFill()
+        } else {
+            ZStack {
+                FaviconTile.letterColor(for: bookmark.host)
+                Text(FaviconTile.letter(for: bookmark.host))
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+        }
+    }
+
+    private func loadIcon() async {
+        if let cached = FaviconService.shared.cachedFaviconData(forHost: bookmark.host) {
+            iconData = cached
+            return
+        }
+        iconData = await FaviconService.shared.favicon(forHost: bookmark.host)
+    }
+
+    /// Click → current tab; ⌘-click → new tab (matches the omnibox ⌘Enter convention).
+    private func open() {
+        guard let url = URL(string: bookmark.url) else { return }
+        let commandHeld = NSEvent.modifierFlags.contains(.command)
+        onOpen(url, commandHeld)
     }
 }

@@ -11,6 +11,16 @@ import SwiftUI
 struct SurfrApp: App {
     /// Drives the bookmark command's title (Bookmark ↔ Remove) from current state.
     @ObservedObject private var bookmarks = BookmarkState.shared
+    /// Drives the trust command's title from the active domain's trust state.
+    @ObservedObject private var trust = TrustStore.shared
+
+    /// The active tab's host (tracked via `BookmarkState.activeURL`), if it's a
+    /// real web page the trust command can act on.
+    private var activeHost: String? {
+        guard let url = bookmarks.activeURL, let host = url.host, !host.isEmpty,
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+        return host
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -37,6 +47,16 @@ struct SurfrApp: App {
                     NotificationCenter.default.post(name: .toggleBookmark, object: nil)
                 }
                 .keyboardShortcut("d", modifiers: .command)
+
+                // Slice C1: trust the active site's domain so its session persists
+                // (shared persistent store). Disabled when there's no real page.
+                Button(trust.isTrusted(host: activeHost)
+                       ? "Stop Trusting This Site"
+                       : "Trust This Site (Stay Logged In)") {
+                    NotificationCenter.default.post(name: .toggleTrust, object: nil)
+                }
+                .keyboardShortcut("t", modifiers: [.command, .shift])
+                .disabled(activeHost == nil)
 
                 // Addition 3: keyboard back/forward (was missing). Pairs with the
                 // swipe-gesture and mouse side-button paths wired in ContentView.

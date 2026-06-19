@@ -124,6 +124,17 @@ final class HistoryStore {
         }
     }
 
+    /// Delete entries visited on or after `date` (e.g. "clear last hour / 24h").
+    /// Complements `prune(olderThan:)`, which deletes the *older* end.
+    func deleteVisited(since date: Date) async {
+        guard let dbQueue else { return }
+        _ = try? await dbQueue.write { db in
+            try HistoryEntry
+                .filter(HistoryEntry.Columns.lastVisited >= date)
+                .deleteAll(db)
+        }
+    }
+
     /// Expire entries last visited before `date` (auto-expiry / retention).
     func prune(olderThan date: Date) async {
         guard let dbQueue else { return }

@@ -12,6 +12,9 @@ extension Notification.Name {
     static let closeTab = Notification.Name("closeTab")
     /// Posted by the ⌘D menu command to bookmark/unbookmark the active tab's page.
     static let toggleBookmark = Notification.Name("toggleBookmark")
+    /// Posted by the trust menu command: toggle persistent-session trust for the
+    /// active tab's domain (slice C1).
+    static let toggleTrust = Notification.Name("toggleTrust")
     /// Posted by the ⌘[ menu command: navigate the active tab back.
     static let goBack = Notification.Name("goBack")
     /// Posted by the ⌘] menu command: navigate the active tab forward.
@@ -20,20 +23,37 @@ extension Notification.Name {
 
 private let homeURL = URL(string: "https://duckduckgo.com")!
 
-/// One browser tab. Owns its own `WKWebView` with an isolated `.nonPersistent()`
-/// data store, so tabs never share cookies/cache, plus its own omnibox/URL state.
+/// One browser tab. Owns a `WKWebView` whose data store depends on trust (slice C1):
+/// trusted hosts share the persistent `WKWebsiteDataStore.default()`; untrusted
+/// hosts use an isolated per-tab `.nonPersistent()` store. Because a web view's
+/// store is fixed at creation, `webView` is swappable — recreated on the correct
+/// store when a navigation crosses a trust boundary (see `BrowserState.rebind`).
 @MainActor
 final class Tab: ObservableObject, Identifiable {
+    /// What a tab renders: a normal web view, or an internal SwiftUI "page" (e.g.
+    /// the full-page history view) that has no real navigation/host.
+    enum Kind: Equatable {
+        case web
+        case history
+    }
+
     let id = UUID()
-    let webView: WKWebView
+    /// Fixed at creation. Internal-page kinds render SwiftUI instead of the web view
+    /// and are never grouped in the rail or discarded as pristine.
+    let kind: Kind
+
+    /// The tab's live web view. `@Published` so the UI follows a store swap.
+    @Published private(set) var webView: WKWebView
+    /// Whether `webView` is bound to the shared persistent store (a trusted host).
+    private(set) var usesPersistentStore: Bool
 
     @Published var title: String
     @Published var addressText: String
     @Published var url: URL
 
-    /// True once this tab has completed a navigation to a real http(s) page.
+    /// True once this tab has begun a navigation to a real http(s) page.
     /// A tab that hasn't navigated and has no typed address text is "pristine".
-    var hasNavigated = false
+    @Published var hasNavigated = false
     /// Monotonic activation stamp; higher = more recently active (rail ordering).
     var activationOrder = 0
 
@@ -42,64 +62,84 @@ final class Tab: ObservableObject, Identifiable {
     /// Sentinel URL for a blank/pristine tab that hasn't navigated anywhere.
     static let blankURL = URL(string: "about:blank")!
 
-    /// A blank, pristine tab: builds an isolated web view but loads nothing, so it
-    /// stays out of the rail until it navigates (see `BrowserState` pristine rule).
+    /// Safari UA token appended via `WKWebViewConfiguration.applicationNameForUserAgent`,
+    /// so sites don't flag us as an unsupported/embedded browser. WebKit keeps the
+    /// Mozilla/AppleWebKit/OS parts system-correct, producing a real Safari UA:
+    ///   Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15
+    ///   (KHTML, like Gecko) Version/26.0 Safari/605.1.15
+    /// The macOS token is frozen at 10_15_7 by Safari itself — expected. Bump the
+    /// Version/ number as Safari advances.
+    static let safariUserAgentToken = "Version/26.0 Safari/605.1.15"
+
+    /// A blank, pristine tab: ephemeral store, loads nothing, so it stays out of
+    /// the rail until it navigates (see `BrowserState` pristine rule).
     convenience init() {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
-
-        #if DEBUG
-        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        #endif
-
-        let webView = WebContentView(frame: .zero, configuration: config)
-        self.init(webView: webView, url: Self.blankURL, loadInitialRequest: false)
+        self.init(url: Self.blankURL, persistent: false, adopting: nil, load: false)
         self.addressText = ""   // pristine: empty omnibox, no typed text
     }
 
-    /// A normal tab: builds its own isolated web view and loads `url`.
+    /// A normal tab: store chosen from the destination host's trust, then loads.
     convenience init(url: URL) {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()   // ← isolated per tab; no shared cookies/cache
-
-        #if DEBUG
-        // Restore the right-click "Inspect Element" item (opens Web Inspector in-app, no Safari).
-        // Private preference set via KVC so the selector isn't statically linked; DEBUG-only.
-        // Must be set before the web view snapshots its configuration.
-        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        #endif
-
-        let webView = WebContentView(frame: .zero, configuration: config)
-        self.init(webView: webView, url: url, loadInitialRequest: true)
+        self.init(url: url, persistent: TrustStore.shared.isTrusted(url: url), adopting: nil, load: true)
     }
 
-    /// A pop-up tab: adopts the web view WebKit created for an allowed `window.open`.
-    /// WebKit drives the initial load itself, so we must not call `load`.
-    convenience init(adopting webView: WKWebView, initialURL: URL?) {
-        self.init(webView: webView, url: initialURL ?? homeURL, loadInitialRequest: false)
+    /// A pop-up tab: adopts the web view WebKit created for an allowed `window.open`
+    /// (its store was already chosen on the configuration). WebKit drives the load.
+    convenience init(adopting webView: WKWebView, initialURL: URL?, persistent: Bool) {
+        self.init(url: initialURL ?? homeURL, persistent: persistent, adopting: webView, load: false)
     }
 
-    private init(webView: WKWebView, url: URL, loadInitialRequest: Bool) {
-        self.webView = webView
+    /// An internal SwiftUI page (e.g. the history view) opened as its own tab. It
+    /// keeps an unused ephemeral web view (so the rest of the app's `tab.webView`
+    /// accesses stay valid) but renders its page chrome instead.
+    convenience init(page kind: Kind, title: String) {
+        self.init(url: Self.blankURL, persistent: false, adopting: nil, load: false, kind: kind)
+        self.addressText = ""
+        self.title = title
+    }
 
-        #if DEBUG
-        // 2d: let Safari's Web Inspector attach to this tab. DEBUG-only — never in release.
-        webView.isInspectable = true
-        #endif
-
-        // Addition 3 (swipe nav): two-finger trackpad / Magic Mouse swipe drives
-        // back/forward. Valid WKWebView property on macOS; set per tab's web view.
-        webView.allowsBackForwardNavigationGestures = true
-
-        // Apply the ad-blocking content rules to this tab (now or once compiled).
-        ContentBlocker.shared.apply(to: webView)
-
+    private init(url: URL, persistent: Bool, adopting: WKWebView?, load: Bool, kind: Kind = .web) {
+        self.kind = kind
         self.url = url
         self.addressText = url.absoluteString
         self.title = url.host() ?? "New Tab"
+        self.usesPersistentStore = persistent
+        self.webView = adopting ?? Tab.makeWebView(persistent: persistent)
+        configureCurrentWebView()
+        if load, adopting == nil {
+            webView.load(URLRequest(url: url))
+        }
+    }
 
-        // Keep the tab's title and omnibox in sync as the page navigates.
-        // WebKit delivers these KVO callbacks on the main thread.
+    /// Build a fresh web view on the requested store (persistent ↔ ephemeral),
+    /// with the Safari UA and DEBUG inspector preference baked into its config.
+    static func makeWebView(persistent: Bool) -> WebContentView {
+        let config = WKWebViewConfiguration()
+        // Trusted → single shared persistent store (cookies/SSO survive + are
+        // shared across trusted tabs). Untrusted → fresh isolated ephemeral store.
+        config.websiteDataStore = persistent ? .default() : .nonPersistent()
+        config.applicationNameForUserAgent = safariUserAgentToken
+        #if DEBUG
+        // Restore the right-click "Inspect Element" item; DEBUG-only, set before
+        // the web view snapshots its configuration.
+        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        #endif
+        return WebContentView(frame: .zero, configuration: config)
+    }
+
+    /// Per-web-view setup, re-runnable after a store swap: inspector, swipe nav,
+    /// content blocking (on the web view's `userContentController`, independent of
+    /// the data store), and KVO of title/URL. Resetting `observations` invalidates
+    /// the old web view's observers.
+    private func configureCurrentWebView() {
+        let webView = self.webView
+        #if DEBUG
+        webView.isInspectable = true   // 2d: Safari Web Inspector can attach. DEBUG only.
+        #endif
+        webView.allowsBackForwardNavigationGestures = true
+        ContentBlocker.shared.apply(to: webView)
+
+        observations = []
         observations.append(webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
             MainActor.assumeIsolated {
                 guard let t = webView.title, !t.isEmpty else { return }
@@ -116,17 +156,23 @@ final class Tab: ObservableObject, Identifiable {
                 self?.addressText = u.absoluteString
             }
         })
-
-        if loadInitialRequest {
-            webView.load(URLRequest(url: url))
-        }
     }
 
-    /// Load a parsed URL in this tab.
+    /// Load a parsed URL in this tab. Trust-boundary store selection happens in the
+    /// navigation delegate (`decidePolicyFor navigationAction`), not here.
     func navigate(to newURL: URL) {
         url = newURL
         addressText = newURL.absoluteString
         webView.load(URLRequest(url: newURL))
+    }
+
+    /// Swap this tab's web view onto the requested store, keeping the same `Tab`
+    /// identity (rail/activation/bindings on `$url`/`$title` are preserved). The
+    /// caller re-attaches delegates and triggers the load.
+    func rebindStore(persistent: Bool) {
+        usesPersistentStore = persistent
+        webView = Tab.makeWebView(persistent: persistent)   // @Published swap → UI rebuilds
+        configureCurrentWebView()
     }
 }
 
@@ -164,6 +210,9 @@ final class BrowserState: ObservableObject {
     private var activeURLBinding: AnyCancellable?
     /// Addition 5: tracks the active tab's title so the window title updates live.
     private var activeTitleBinding: AnyCancellable?
+    /// Observes the trust set so the window title's "· Trusted: …" suffix updates
+    /// live when the active domain is trusted/untrusted.
+    private var trustBinding: AnyCancellable?
     /// Per-tab URL subscriptions, so we can react when a pristine tab navigates.
     private var tabURLBindings: [Tab.ID: AnyCancellable] = [:]
     /// Monotonic activation counter; assigned to each tab as it becomes active
@@ -179,10 +228,15 @@ final class BrowserState: ObservableObject {
         tabs = [first]
         activeTabID = first.id
         popupGate.browser = self
+        historyRecorder.browser = self   // for trust-boundary store rebinding
         activationCounter = 1
         first.activationOrder = 1
         wire(first)
         bindActiveURL()
+        // Refresh the window title whenever the trust set changes (fires immediately).
+        trustBinding = TrustStore.shared.$domains.sink { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshWindowTitle() }
+        }
         recomputeHostGroups()
     }
 
@@ -195,6 +249,15 @@ final class BrowserState: ObservableObject {
         tabs.append(tab)
         wire(tab)
         activeTabID = tab.id   // didSet bumps activation, discards prior pristine, recomputes
+    }
+
+    /// Open the full-page history view in a new foreground tab (rail history icon).
+    /// It's an internal page: no host, not in the rail favicon stack, not discarded.
+    func openHistoryPage() {
+        let tab = Tab(page: .history, title: "History")
+        tabs.append(tab)
+        wire(tab)
+        activeTabID = tab.id
     }
 
     /// Open `url` in a new foreground tab (⌘Enter from the omnibox).
@@ -232,19 +295,41 @@ final class BrowserState: ObservableObject {
         for id in ids { closeTab(id) }
     }
 
-    /// Adopt an allowed pop-up as a new tab with its own isolated ephemeral store.
-    /// Called by `PopupGate` from `createWebViewWith`; WebKit then drives its load.
+    /// Adopt an allowed pop-up as a new tab. Its store follows the destination
+    /// host's trust (persistent for trusted, isolated ephemeral otherwise), chosen
+    /// on the configuration before WebKit snapshots it. WebKit then drives the load.
     func adoptPopup(configuration: WKWebViewConfiguration, initialURL: URL?) -> WKWebView {
-        configuration.websiteDataStore = .nonPersistent()   // isolate like every other tab
+        let persistent = TrustStore.shared.isTrusted(url: initialURL)
+        configuration.websiteDataStore = persistent ? .default() : .nonPersistent()
+        configuration.applicationNameForUserAgent = Tab.safariUserAgentToken   // Safari UA on popups too
         #if DEBUG
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
         #endif
         let webView = WebContentView(frame: .zero, configuration: configuration)
-        let tab = Tab(adopting: webView, initialURL: initialURL)
+        let tab = Tab(adopting: webView, initialURL: initialURL, persistent: persistent)
         tabs.append(tab)
         wire(tab)               // subscription marks it real (it already has a URL)
         activeTabID = tab.id
         return webView
+    }
+
+    /// Find the tab that owns `webView` (used by the navigation delegate).
+    func tab(for webView: WKWebView) -> Tab? {
+        tabs.first { $0.webView === webView }
+    }
+
+    /// Recreate `tab`'s web view on the correct store and load `url` there. Called
+    /// when a navigation crosses a trust boundary (from `decidePolicyFor
+    /// navigationAction`) or when the user toggles trust. Re-attaches delegates to
+    /// the new web view; the `Tab`'s `$url`/`$title` bindings are unaffected.
+    func rebind(_ tab: Tab, to url: URL, persistent: Bool) {
+        tab.rebindStore(persistent: persistent)
+        tab.webView.uiDelegate = popupGate
+        tab.webView.navigationDelegate = historyRecorder
+        #if DEBUG
+        print("[Trust] rebound tab to \(persistent ? "persistent" : "ephemeral") store for \(url.host ?? "?")")
+        #endif
+        tab.webView.load(URLRequest(url: url))
     }
 
     // MARK: - Rail: grouping, ordering, pristine rule
@@ -269,14 +354,24 @@ final class BrowserState: ObservableObject {
         refreshWindowTitle()
     }
 
-    /// Addition 5: derive the window title from the active tab's state.
+    /// Addition 5: derive the window title from the active tab's state. Slice C1
+    /// indicators: append a plain-text "· Trusted: <Primary>" when the active tab's
+    /// domain is trusted (system titles are plain text — no badge graphic here).
     private func refreshWindowTitle() {
         let tab = activeTab
+        if tab.kind == .history { windowTitle = "History"; return }
+        let base: String
         if !tab.hasNavigated {
-            windowTitle = "New Tab"
+            base = "New Tab"
         } else {
             let trimmed = tab.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            windowTitle = trimmed.isEmpty ? "Surfr" : trimmed
+            base = trimmed.isEmpty ? "Surfr" : trimmed
+        }
+        if tab.hasNavigated, let host = tab.url.host, TrustStore.shared.isTrusted(host: host) {
+            let primary = TrustStore.primaryLabel(forDomain: TrustStore.registrableDomain(for: host))
+            windowTitle = "\(base) · Trusted: \(primary)"
+        } else {
+            windowTitle = base
         }
     }
 
@@ -318,10 +413,12 @@ final class BrowserState: ObservableObject {
         recomputeHostGroups()
     }
 
-    /// Pristine = never navigated AND no typed-but-uncommitted address text. A tab
-    /// with typed text is NOT pristine and is never discarded (text preserved).
+    /// Pristine = a plain web tab that never navigated AND has no typed-but-
+    /// uncommitted address text. Internal pages (e.g. history) are never pristine,
+    /// so they aren't discarded when you switch away.
     private func isPristine(_ tab: Tab) -> Bool {
-        !tab.hasNavigated && tab.addressText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        tab.kind == .web && !tab.hasNavigated
+            && tab.addressText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func discard(_ tab: Tab) {
@@ -376,6 +473,9 @@ final class BrowserState: ObservableObject {
 /// ingests the page's first-party declared favicons. Adds these hooks only — no
 /// other navigation behaviour is changed.
 final class HistoryRecorder: NSObject, WKNavigationDelegate {
+    /// For trust-boundary store rebinding (slice C1). Weak — `BrowserState` owns us.
+    weak var browser: BrowserState?
+
     /// Reads `<link rel>` icon hrefs, apple-touch-icon first (usually higher-res),
     /// resolved to absolute URLs by the DOM.
     private static let iconLinkJS = """
@@ -403,12 +503,41 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
         decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
     }
 
-    /// Honour `download`-attribute links and explicit download navigation actions;
-    /// all other navigations proceed as before.
+    /// Decide each navigation action, in order:
+    ///  1. download-attribute / explicit download actions → `.download`;
+    ///  2. trust-boundary crossing (slice C1) → `.cancel` + recreate the tab's web
+    ///     view on the correct store and load there;
+    ///  3. otherwise → `.allow` (unchanged).
+    ///
+    /// The store-binding hook lives here because this fires for *every* main-frame
+    /// navigation — omnibox loads, link clicks, redirects, bookmark opens — so one
+    /// check covers them all. We compare the destination host's required store
+    /// (`TrustStore.isTrusted`) to the web view's current store and swap only on a
+    /// genuine mismatch. Cancelling *before* the response means untrusted cookies
+    /// never write to the persistent store, and trusted pages always persist.
+    /// Same-store navigations (incl. SSO redirect chains within a registrable
+    /// domain) just `.allow` — no swap, no jank.
     func webView(_ webView: WKWebView,
                  decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
+        if navigationAction.shouldPerformDownload {
+            decisionHandler(.download)
+            return
+        }
+        // Only main-frame http(s) navigations can change a tab's store. Subframes
+        // (iframes) and non-web schemes never trigger a swap.
+        if let browser, let tab = browser.tab(for: webView),
+           navigationAction.targetFrame?.isMainFrame == true,
+           let url = navigationAction.request.url,
+           let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
+            let wantPersistent = TrustStore.shared.isTrusted(host: url.host)
+            if wantPersistent != tab.usesPersistentStore {
+                decisionHandler(.cancel)
+                browser.rebind(tab, to: url, persistent: wantPersistent)
+                return
+            }
+        }
+        decisionHandler(.allow)
     }
 
     /// WebKit hands us the download once a response is converted: start tracking it.
@@ -482,6 +611,9 @@ final class BookmarkState: ObservableObject {
 
     /// URLs currently bookmarked — mirror of the store, for synchronous lookups.
     @Published private(set) var bookmarkedURLs: Set<String> = []
+    /// Full bookmark records, most-recently-added first (store's natural order).
+    /// Drives the new-tab bookmarks grid (slice 6); updates live on add/remove.
+    @Published private(set) var bookmarks: [Bookmark] = []
     /// The active tab's current URL, so the menu title can reflect its state.
     @Published var activeURL: URL?
 
@@ -494,22 +626,36 @@ final class BookmarkState: ObservableObject {
     private init() {}
 
     /// Populate the mirror from the store; call once at launch.
-    func load() async {
-        bookmarkedURLs = Set(await BookmarkStore.shared.all().map(\.url))
-    }
+    func load() async { await reload() }
 
     /// Toggle the bookmark for a page; ignores blank/about:blank/non-web pages.
     func toggle(url: URL, title: String?) async {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = url.host, !host.isEmpty else { return }
-        let key = url.absoluteString
-        if bookmarkedURLs.contains(key) {
+        if bookmarkedURLs.contains(url.absoluteString) {
             await BookmarkStore.shared.removeByURL(url)
-            bookmarkedURLs.remove(key)
         } else {
             await BookmarkStore.shared.add(url: url, title: title)
-            bookmarkedURLs.insert(key)
         }
+        await reload()
+    }
+
+    /// Remove a specific bookmark (new-tab grid "Remove bookmark").
+    func remove(_ bookmark: Bookmark) async {
+        if let id = bookmark.id {
+            await BookmarkStore.shared.remove(id: id)
+        } else if let url = URL(string: bookmark.url) {
+            await BookmarkStore.shared.removeByURL(url)
+        }
+        await reload()
+    }
+
+    /// Re-read the store into both the URL set and the ordered records, so the
+    /// menu state and the grid stay consistent from one source of truth.
+    private func reload() async {
+        let all = await BookmarkStore.shared.all()
+        bookmarks = all
+        bookmarkedURLs = Set(all.map(\.url))
     }
 }
 
@@ -619,6 +765,8 @@ struct FaviconTile: View {
     let onCloseHost: () -> Void
 
     @State private var iconData: Data?
+    /// Observe trust so the badge appears/disappears live on trust/untrust.
+    @ObservedObject private var trustStore = TrustStore.shared
 
     private static let size: CGFloat = 32        // tile cell (unchanged)
     private static let iconSize: CGFloat = 20    // favicon/letter inset inside the tile
@@ -646,6 +794,15 @@ struct FaviconTile: View {
             }
         }
         .frame(width: 40, height: 40)
+        // Trusted check in the top-RIGHT corner (count badge stays bottom-right, so
+        // they never collide). Positioned INSIDE the 40×40 frame — the same margin
+        // the favicon sits within — so it isn't clipped by the rail/scroll edges
+        // (the old top-leading negative offset poked outside and got cut off).
+        .overlay(alignment: .topTrailing) {
+            if trustStore.isTrusted(host: host) {
+                TrustedBadge().offset(x: -1, y: 1)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
         // Addition 1: right-click → close the whole host group. Gives single-tab
@@ -714,16 +871,14 @@ struct RailView: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            // History — placeholder this slice; the full-page history view is later.
-            Button {
-                // TODO(history-view slice): open the full-page history view in a NEW tab.
-            } label: {
+            // History — opens the full-page history view in a NEW tab (§7).
+            Button(action: browser.openHistoryPage) {
                 Image(systemName: "clock")
                     .font(.system(size: 16))
                     .frame(width: 32, height: 28)
             }
             .buttonStyle(.plain)
-            .help("History (not wired up yet)")
+            .help("History")
 
             // New tab — same behaviour as ⌘T.
             Button(action: browser.newTab) {
@@ -915,6 +1070,32 @@ struct TabFlyoutRow: View {
     }
 }
 
+/// The active tab's content: the new-tab page while pristine, else its web view.
+/// Observes the `Tab` so it re-renders when `hasNavigated` flips or — crucially for
+/// slice C1 — when `webView` is swapped onto a different store. The inner `.id`
+/// keyed by the web view's identity forces the `NSViewRepresentable` to rebuild
+/// (and thus display the new web view) on a swap.
+struct ActiveTabContent: View {
+    @ObservedObject var tab: Tab
+    let onNavigate: (URL, Bool) -> Void
+    let focusToken: Int
+
+    var body: some View {
+        switch tab.kind {
+        case .history:
+            // Internal page: clicking a row always opens in a NEW tab.
+            HistoryPage(onOpenURL: { onNavigate($0, true) })
+        case .web:
+            if tab.hasNavigated {
+                WebView(webView: tab.webView)
+                    .id(ObjectIdentifier(tab.webView))
+            } else {
+                NewTabPage(tab: tab, onNavigate: onNavigate, focusToken: focusToken)
+            }
+        }
+    }
+}
+
 struct ContentView: View {
     @StateObject private var browser = BrowserState()
     /// Context A overlay presented (only on a loaded page).
@@ -925,6 +1106,8 @@ struct ContentView: View {
     @State private var newTabFocusToken = 0
     /// Addition 3: retained token for the app-local mouse side-button monitor.
     @State private var mouseNavMonitor: Any?
+    /// Slice C1 indicators: the trust toast currently shown (nil = none).
+    @State private var trustToast: TrustToast?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -933,14 +1116,10 @@ struct ContentView: View {
             ZStack {
                 // The content area is either the new-tab page (pristine tab) or the
                 // loaded web view — no persistent address bar (zero chrome).
-                Group {
-                    if browser.activeTab.hasNavigated {
-                        WebView(webView: browser.activeTab.webView)
-                    } else {
-                        NewTabPage(tab: browser.activeTab, onNavigate: navigate, focusToken: newTabFocusToken)
-                    }
-                }
-                .id(browser.activeTabID)
+                // `ActiveTabContent` observes the tab so it follows a store swap.
+                ActiveTabContent(tab: browser.activeTab, onNavigate: navigate,
+                                 focusToken: newTabFocusToken)
+                    .id(browser.activeTabID)
 
                 // Context A: the summoned overlay, over the dimmed page. The
                 // per-summon token id forces a fresh field + focus each time.
@@ -948,6 +1127,23 @@ struct ContentView: View {
                     SpotlightOverlay(currentURL: browser.activeTab.url, focusToken: spotlightToken,
                                      onNavigate: navigate, onClose: closeSpotlight)
                         .id(spotlightToken)
+                }
+
+                // Slice C1 indicators: trust toast, top-right, auto-dismiss ~7s.
+                if let toast = trustToast {
+                    TrustToastView(toast: toast) { dismissTrustToast() }
+                        .padding(.top, 16)
+                        .padding(.trailing, 16)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .id(toast.id)   // fresh identity → each toast slides/fades in anew
+                        .task(id: toast.id) {
+                            try? await Task.sleep(nanoseconds: 7_000_000_000)
+                            // Don't tear down a newer toast: bail if this timer was
+                            // cancelled (replaced) and only dismiss our own toast.
+                            guard !Task.isCancelled else { return }
+                            dismissTrustToast(id: toast.id)
+                        }
                 }
             }
         }
@@ -1008,6 +1204,28 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .closeTab)) { _ in
             browser.closeTab(browser.activeTabID)
         }
+        // Slice C1: toggle persistent-session trust for the active tab's domain,
+        // then reload it in the now-correct store. Trusting → persistent (log in
+        // once, then it persists); untrusting → ephemeral + the domain's persisted
+        // data is cleared by `TrustStore.untrust`.
+        .onReceive(NotificationCenter.default.publisher(for: .toggleTrust)) { _ in
+            let tab = browser.activeTab
+            guard let url = tab.url as URL?, let host = url.host, !host.isEmpty,
+                  let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
+            // Decide from the state BEFORE mutating; the toast fires only on this
+            // explicit action (never on revisits to an already-trusted site).
+            let wasTrusted = TrustStore.shared.isTrusted(host: host)
+            let domain = TrustStore.registrableDomain(for: host)
+            if wasTrusted {
+                TrustStore.shared.untrust(host: host)
+                browser.rebind(tab, to: url, persistent: false)
+                showTrustToast(TrustToast(domain: domain, trusting: false))
+            } else {
+                TrustStore.shared.trust(host: host)
+                browser.rebind(tab, to: url, persistent: true)
+                showTrustToast(TrustToast(domain: domain, trusting: true))
+            }
+        }
         // Addition 3: keyboard ⌘[ / ⌘] back/forward on the active tab's web view.
         .onReceive(NotificationCenter.default.publisher(for: .goBack)) { _ in
             let webView = browser.activeTab.webView
@@ -1063,6 +1281,22 @@ struct ContentView: View {
         showSpotlight = false
         let webView = browser.activeTab.webView
         DispatchQueue.main.async { webView.window?.makeFirstResponder(webView) }
+    }
+
+    /// Show a trust toast with a slide/fade in; replacing any current one restarts
+    /// its auto-dismiss timer (the overlay's `.task(id:)` is keyed by toast id).
+    private func showTrustToast(_ toast: TrustToast) {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+            trustToast = toast
+        }
+    }
+
+    /// Dismiss the toast. With `id`, only dismiss if that toast is still the one
+    /// shown (so a stale auto-dismiss timer can't tear down a newer toast); the
+    /// ✕/click path passes no id and always dismisses the current toast.
+    private func dismissTrustToast(id: UUID? = nil) {
+        if let id, trustToast?.id != id { return }
+        withAnimation(.easeOut(duration: 0.25)) { trustToast = nil }
     }
 }
 
