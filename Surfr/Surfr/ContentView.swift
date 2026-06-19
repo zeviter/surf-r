@@ -47,6 +47,7 @@ final class Tab: ObservableObject, Identifiable {
         case history
         case trustedSites
         case shortcuts
+        case downloads
     }
 
     let id = UUID()
@@ -272,6 +273,9 @@ final class BrowserState: ObservableObject {
     /// Open the Keyboard Shortcuts page (⌘/ or the popover's "See all"; slice 9b).
     func openShortcutsPage() { openInternalPage(.shortcuts, title: "Keyboard Shortcuts") }
 
+    /// Open the full Downloads page (⌘⇧J or the popover's "See all"; slice 9c).
+    func openDownloadsPage() { openInternalPage(.downloads, title: "Downloads") }
+
     /// Open an internal-page surface: if one of this kind is already open, switch to
     /// it (no duplicate); otherwise create it. It's a host-less page — not in the
     /// rail favicon stack and not discarded as pristine.
@@ -451,17 +455,29 @@ final class BrowserState: ObservableObject {
             activationCounter += 1
             active.activationOrder = activationCounter
         }
-        // Discard the tab we just left if it's an untouched pristine tab.
+        // Slice 9c: auto-close the surface we just left if it's ephemeral — an
+        // internal page (history/trusted/downloads/shortcuts) or an untouched
+        // pristine new-tab page. This keeps internal surfaces single-instance and
+        // stops them piling up as stray tabs. (When an internal page "gives way" to
+        // a web page via `navigateActiveTab`, the old tab is already gone, so this
+        // is a no-op for that case.)
         if previous != activeTabID,
-           let prev = tabs.first(where: { $0.id == previous }), isPristine(prev) {
+           let prev = tabs.first(where: { $0.id == previous }), isEphemeralSurface(prev) {
             discard(prev)
         }
         recomputeHostGroups()
     }
 
+    /// An ephemeral surface auto-closes when it's no longer the active tab: every
+    /// internal page, plus a pristine new-tab page. Applied generically, so any
+    /// future internal `Kind` inherits the behaviour without special-casing.
+    private func isEphemeralSurface(_ tab: Tab) -> Bool {
+        tab.kind != .web || isPristine(tab)
+    }
+
     /// Pristine = a plain web tab that never navigated AND has no typed-but-
-    /// uncommitted address text. Internal pages (e.g. history) are never pristine,
-    /// so they aren't discarded when you switch away.
+    /// uncommitted address text. The typed-URL preservation rule for real new tabs
+    /// is unchanged (a tab with typed text is not pristine, so it's not discarded).
     private func isPristine(_ tab: Tab) -> Bool {
         tab.kind == .web && !tab.hasNavigated
             && tab.addressText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -470,7 +486,7 @@ final class BrowserState: ObservableObject {
     private func discard(_ tab: Tab) {
         tabs.removeAll { $0.id == tab.id }
         tabURLBindings[tab.id] = nil
-        railLog("pristine tab discarded")
+        railLog("ephemeral surface auto-closed (\(tab.kind == .web ? "new-tab" : "internal page"))")
     }
 
     /// Group real (navigated) tabs by full host; one tile per host, in stable
@@ -924,14 +940,18 @@ struct RailView: View {
             railIconButton("clock", help: "History", isActive: browser.activeTab.kind == .history,
                            action: browser.openHistoryPage)
 
-            // Downloads — manager popover; icon keeps its active/completed/idle states.
-            // (Its active-tab green arrives in 9c when downloads becomes a page.)
-            DownloadsRailIcon {
+            // Downloads — icon opens the popover (recent + live progress); the
+            // popover's "See all" / ⌘⇧J open the full page. Keeps its progress-ring /
+            // count / completed states, plus the 9a active-green when the page is up.
+            DownloadsRailIcon(isActive: browser.activeTab.kind == .downloads) {
                 showDownloads = true
                 DownloadManager.shared.acknowledge()   // opening clears the green state
             }
             .popover(isPresented: $showDownloads, arrowEdge: .trailing) {
-                DownloadsPopover()
+                DownloadsPopover {
+                    showDownloads = false
+                    browser.openDownloadsPage()
+                }
             }
 
             // Trusted Sites — opens the trusted-sites page (§8). Green when active.
@@ -992,11 +1012,6 @@ struct RailView: View {
         .onChange(of: browser.hostGroups.map(\.host)) { _, hosts in
             // If the flyout's host disappeared (its last tab closed), drop the stale state.
             if let open = flyoutHost, !hosts.contains(open) { flyoutHost = nil }
-        }
-        // ⌘⇧J / Downloads menu: the rail owns the popover state, so open it here.
-        .onReceive(NotificationCenter.default.publisher(for: .openDownloads)) { _ in
-            showDownloads = true
-            DownloadManager.shared.acknowledge()
         }
     }
 
@@ -1166,6 +1181,8 @@ struct ActiveTabContent: View {
             TrustedSitesPage(onOpenURL: { onNavigate($0, true) })
         case .shortcuts:
             ShortcutsPage()   // view-only (9b); editing is 9b2
+        case .downloads:
+            DownloadsPage()   // 9c — full page; the rail keeps its popover
         case .web:
             if tab.hasNavigated {
                 WebView(webView: tab.webView)
@@ -1199,6 +1216,9 @@ private struct BrowserCommandHandlers: ViewModifier {
             }
             .onReceive(NotificationCenter.default.publisher(for: .openTrusted)) { _ in
                 browser.openTrustedSitesPage()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .openDownloads)) { _ in
+                browser.openDownloadsPage()   // ⌘⇧J opens the full page (9c)
             }
             .onReceive(NotificationCenter.default.publisher(for: .openShortcuts)) { _ in
                 browser.openShortcutsPage()   // ⌘/ opens the full page (9b)
@@ -1286,6 +1306,9 @@ struct ContentView: View {
             await ContentBlocker.shared.prepare()
         }
         .task {
+            // Load persisted downloads: migrate prior-run in-progress → interrupted,
+            // prune past the retention window, then populate the list (slice 9c+).
+            await DownloadManager.shared.loadPersisted()
             // Expire history older than the retention window, once per launch.
             await HistoryStore.shared.prune(olderThan: Date().addingTimeInterval(-HistoryStore.retentionInterval))
             #if DEBUG
@@ -1367,9 +1390,9 @@ struct ContentView: View {
             let webView = browser.activeTab.webView
             if webView.canGoForward { webView.goForward() }
         }
-        // Slice 9a — reload variants + open-surface commands (collapsed into one
-        // modifier to keep `body` within the type-checker's budget). `.openDownloads`
-        // is handled by RailView (it owns the popover state).
+        // Slice 9a/9c — reload variants + open-surface commands (incl. ⌘⇧J →
+        // downloads page), collapsed into one modifier to keep `body` within the
+        // type-checker's budget.
         .modifier(BrowserCommandHandlers(browser: browser))
     }
 

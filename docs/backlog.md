@@ -47,8 +47,13 @@
 
 ## C. Deferred polish & fixes
 
-- ☐ **Persistent download history (was 2c).** Downloads are in-memory and reset on quit — decide
-  the privacy tradeoff, then a GRDB `DownloadStore`. More relevant now downloads becomes a page.
+- ✓ **Persistent download history (was 2c).** GRDB `DownloadStore` at
+  `Application Support/Surfr/downloads.sqlite` mirrors `HistoryStore`/`BookmarkStore`; the popover
+  and downloads page survive relaunch. Active downloads stay live/in-memory and are written on
+  finish/fail/cancel; in-progress rows left by a quit are migrated to `interrupted` on launch.
+  Clear-all deletes finished rows from disk; launch-time prune drops entries older than 90 days
+  (`DownloadStore.retentionInterval`). Missing files are shown but marked unavailable (reveal
+  disabled), not auto-deleted.
 - ☐ **Exact registrable-domain via swift-psl.** `TrustStore.registrableDomain` is a pragmatic
   eTLD+1 subset, not the full Public Suffix List. swift-psl is already a transitive dep; link it
   for exact handling of unusual multi-label TLDs.

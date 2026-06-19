@@ -25,6 +25,8 @@ struct CountBadge: View {
 /// Tapping opens the popover (which acknowledges completions → reverts from green).
 struct DownloadsRailIcon: View {
     @ObservedObject private var downloads = DownloadManager.shared
+    /// 9a active-state: true when the downloads page is the active tab.
+    var isActive: Bool = false
     let onTap: () -> Void
 
     private static let glyphSize: CGFloat = 16
@@ -41,30 +43,39 @@ struct DownloadsRailIcon: View {
         return min(1, Double(received) / Double(total))
     }
 
-    private var glyphColor: Color {
-        if !downloads.active.isEmpty { return .primary }           // active
-        if downloads.hasUnacknowledgedCompletion { return .green } // completed
-        return .primary                                             // idle
+    /// The icon BODY is green only for the 9a active-page state — never for download
+    /// completion (that's the ring's job). Idle/in-progress/completed bodies are plain.
+    private var glyphColor: Color { isActive ? .green : .primary }
+
+    /// The ring conveys download STATUS, independent of the body colour:
+    /// downloading → blue fill (determinate, else spinner); completed-unacknowledged
+    /// → full green ring; idle → no ring.
+    @ViewBuilder private var statusRing: some View {
+        if !downloads.active.isEmpty {
+            if let fraction = aggregateFraction {
+                Circle()
+                    .trim(from: 0, to: fraction)
+                    .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: Self.ringSize, height: Self.ringSize)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: Self.ringSize, height: Self.ringSize)
+            }
+        } else if downloads.hasUnacknowledgedCompletion {
+            // Completed: full green ring until the popover is opened (acknowledged).
+            Circle()
+                .stroke(Color.green, style: StrokeStyle(lineWidth: 2))
+                .frame(width: Self.ringSize, height: Self.ringSize)
+        }
+        // Idle: no ring.
     }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             ZStack {
-                if !downloads.active.isEmpty {
-                    if let fraction = aggregateFraction {
-                        // Determinate ring of aggregate progress.
-                        Circle()
-                            .trim(from: 0, to: fraction)
-                            .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                            .rotationEffect(.degrees(-90))
-                            .frame(width: Self.ringSize, height: Self.ringSize)
-                    } else {
-                        // Indeterminate: at least one active download's size is unknown.
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: Self.ringSize, height: Self.ringSize)
-                    }
-                }
+                statusRing
                 Image(systemName: "arrow.down.circle")
                     .font(.system(size: Self.glyphSize))
                     .foregroundStyle(glyphColor)
@@ -85,6 +96,9 @@ struct DownloadsRailIcon: View {
 /// The downloads manager popover (slice 2b): header + "Clear all", a newest-first
 /// list of rows, and an empty state. Renders the in-memory `DownloadManager` live.
 struct DownloadsPopover: View {
+    /// Opens the full downloads page (slice 9c).
+    let onSeeAll: () -> Void
+
     @ObservedObject private var downloads = DownloadManager.shared
 
     /// Newest on top: in-progress (most recent first) above finished (already
@@ -95,13 +109,16 @@ struct DownloadsPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            // Header: title + Clear all (top-right, accent text with a trash icon).
+            HStack(spacing: 10) {
                 Text("Downloads").font(.headline)
                 Spacer()
-                Button("Clear all") { downloads.clearFinished() }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .disabled(downloads.finished.isEmpty)
+                Button { downloads.clearFinished() } label: {
+                    Label("Clear all", systemImage: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                .disabled(downloads.finished.isEmpty)
             }
             Divider()
             if rows.isEmpty {
@@ -117,6 +134,17 @@ struct DownloadsPopover: View {
                 }
                 .frame(maxHeight: 320)
             }
+            // Footer: full-width "See all downloads" row, mirroring the shortcuts popover.
+            Divider()
+            Button(action: onSeeAll) {
+                HStack {
+                    Text("See all downloads")
+                    Spacer()
+                    Image(systemName: "arrow.up.forward.square")
+                }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.tint)
         }
         .padding(10)
         .frame(width: 320)
@@ -175,13 +203,20 @@ struct DownloadRow: View {
                     .font(.caption2).foregroundStyle(.secondary)
             }
         case .completed:
-            let size = item.totalBytes > 0 ? item.totalBytes : item.receivedBytes
-            Text(size > 0 ? "Completed · \(bytes(size))" : "Completed")
-                .font(.caption2).foregroundStyle(.secondary)
+            if item.fileIsMissing {
+                Text("Unavailable — file moved or deleted")
+                    .font(.caption2).foregroundStyle(.secondary)
+            } else {
+                let size = item.totalBytes > 0 ? item.totalBytes : item.receivedBytes
+                Text(size > 0 ? "Completed · \(bytes(size))" : "Completed")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
         case .failed:
             Text("Failed").font(.caption2).foregroundStyle(.red)
         case .cancelled:
             Text("Cancelled").font(.caption2).foregroundStyle(.secondary)
+        case .interrupted:
+            Text("Interrupted").font(.caption2).foregroundStyle(.secondary)
         }
     }
 
@@ -196,9 +231,51 @@ struct DownloadRow: View {
         }
     }
 
-    /// Reveal a finished file in Finder (no-op for other states / unknown path).
+    /// Reveal a finished file in Finder (no-op unless completed AND still present).
     private func revealIfCompleted() {
-        guard item.state == .completed, let url = item.destinationURL else { return }
+        guard item.state == .completed, !item.fileIsMissing, let url = item.destinationURL else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+}
+
+/// The full Downloads page (slice 9c), rendered as an internal tab via the shared
+/// `SearchFilterPage` — consistent with history/trusted/shortcuts. Reuses
+/// `DownloadRow` (progress/state, contextual ✕, reveal-in-Finder), grouped into
+/// In Progress / Finished, searchable by filename or host. Still in-memory.
+struct DownloadsPage: View {
+    @ObservedObject private var downloads = DownloadManager.shared
+    @State private var query = ""
+
+    private func matches(_ item: DownloadItem, _ q: String) -> Bool {
+        guard !q.isEmpty else { return true }
+        return item.filename.lowercased().contains(q)
+            || (item.sourceURL?.host?.lowercased().contains(q) ?? false)
+    }
+
+    private var sections: [PageSection<DownloadItem>] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let active = Array(downloads.active.reversed()).filter { matches($0, q) }   // newest first
+        let finished = downloads.finished.filter { matches($0, q) }                 // already newest first
+        var result: [PageSection<DownloadItem>] = []
+        if !active.isEmpty { result.append(PageSection(id: "active", title: "In Progress", items: active)) }
+        if !finished.isEmpty { result.append(PageSection(id: "finished", title: "Finished", items: finished)) }
+        return result
+    }
+
+    var body: some View {
+        SearchFilterPage(
+            title: "Downloads",
+            query: $query,
+            searchPrompt: "Search downloads",
+            sections: sections,
+            emptyMessage: "No downloads",
+            noResultsMessage: "No results",
+            actions: {
+                Button("Clear all") { downloads.clearFinished() }
+                    .foregroundStyle(.secondary)
+                    .disabled(downloads.finished.isEmpty)
+            },
+            row: { DownloadRow(item: $0) }
+        )
     }
 }

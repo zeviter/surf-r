@@ -2,12 +2,16 @@ import Foundation
 import WebKit
 import Combine
 
-/// Lifecycle of a single download (slice A: tracking only — UI is slice B).
-enum DownloadState: Equatable {
+/// Lifecycle of a single download. `interrupted` is a persisted-only state: a
+/// download left `inProgress` when the app quit (WKWebView downloads can't resume
+/// across termination), migrated on the next launch. Raw values are the persisted
+/// `state` strings in `DownloadStore`.
+enum DownloadState: String, Equatable {
     case inProgress
     case completed
     case failed
     case cancelled
+    case interrupted
 }
 
 /// One tracked download. Observes the underlying `WKDownload.progress` so byte
@@ -15,10 +19,14 @@ enum DownloadState: Equatable {
 /// In-memory only for now (no persistence).
 @MainActor
 final class DownloadItem: ObservableObject, Identifiable {
-    let id = UUID()
+    let id: UUID
 
     /// Where the file is coming from (the original request URL, if known).
     let sourceURL: URL?
+    /// When the download started (or was first persisted).
+    let dateAdded: Date
+    /// When it reached a terminal state (completed/failed/cancelled/interrupted).
+    private(set) var dateCompleted: Date?
     /// Final on-disk location, set once a destination is decided (in ~/Downloads).
     @Published private(set) var destinationURL: URL?
     /// Display name; provisional until `decideDestination` supplies the real one.
@@ -29,14 +37,18 @@ final class DownloadItem: ObservableObject, Identifiable {
     @Published private(set) var receivedBytes: Int64 = 0
     @Published private(set) var state: DownloadState = .inProgress
 
-    /// The live WebKit download. `fileprivate` so the manager can cancel it.
-    fileprivate let download: WKDownload
+    /// The live WebKit download. `nil` for items reconstructed from the store (a
+    /// finished/interrupted download from a prior launch has no live download).
+    fileprivate let download: WKDownload?
     private var observations: [NSKeyValueObservation] = []
 
+    /// Live download from WebKit.
     init(download: WKDownload, sourceURL: URL?, suggestedFilename: String) {
+        self.id = UUID()
         self.download = download
         self.sourceURL = sourceURL
         self.filename = suggestedFilename
+        self.dateAdded = Date()
 
         // Mirror the WKDownload's Progress into @Published byte counts. The KVO
         // callback can arrive off the main thread, so read the Sendable Int64s
@@ -61,6 +73,45 @@ final class DownloadItem: ObservableObject, Identifiable {
         }
     }
 
+    /// Reconstruct a finished download from a persisted record (no live download).
+    init(record: DownloadRecord) {
+        self.id = UUID(uuidString: record.id) ?? UUID()
+        self.download = nil
+        self.sourceURL = record.sourceURL.flatMap(URL.init(string:))
+        self.dateAdded = record.dateAdded
+        self.dateCompleted = record.dateCompleted
+        self.filename = record.filename
+        self.destinationURL = record.destinationPath.map { URL(fileURLWithPath: $0) }
+        self.totalBytes = record.totalBytes
+        self.receivedBytes = record.receivedBytes
+        // Defensive: any stray inProgress row is treated as interrupted (the store
+        // migrates these at launch, so this should not normally trigger).
+        self.state = DownloadState(rawValue: record.state) ?? .interrupted
+    }
+
+    /// A completed download whose file is no longer at its destination — shown but
+    /// not revealable. Cheap `stat`; only meaningful for completed items.
+    var fileIsMissing: Bool {
+        guard state == .completed, let url = destinationURL else { return false }
+        return !FileManager.default.fileExists(atPath: url.path)
+    }
+
+    /// Snapshot for persistence.
+    func makeRecord() -> DownloadRecord {
+        DownloadRecord(
+            id: id.uuidString,
+            filename: filename,
+            sourceURL: sourceURL?.absoluteString,
+            sourceHost: sourceURL?.host,
+            destinationPath: destinationURL?.path,
+            totalBytes: totalBytes,
+            receivedBytes: receivedBytes,
+            state: state.rawValue,
+            dateAdded: dateAdded,
+            dateCompleted: dateCompleted
+        )
+    }
+
     /// Adopt the real destination/name decided by the manager.
     fileprivate func setDestination(_ url: URL) {
         destinationURL = url
@@ -69,9 +120,10 @@ final class DownloadItem: ObservableObject, Identifiable {
 
     fileprivate func markState(_ newState: DownloadState) {
         state = newState
+        if newState != .inProgress { dateCompleted = Date() }
     }
 
-    /// Cancel an in-progress download (no resume kept; slice A).
+    /// Cancel an in-progress download (no resume kept).
     func cancel() {
         DownloadManager.shared.cancel(self)
     }
@@ -103,12 +155,39 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
     /// rail icon reverts from green to idle.
     func acknowledge() { hasUnacknowledgedCompletion = false }
 
-    /// "Clear all": drop every finished/failed/cancelled entry. In-progress
-    /// downloads are untouched and keep running.
-    func clearFinished() { finished.removeAll() }
+    /// "Clear all": drop every finished/failed/cancelled/interrupted entry from both
+    /// the in-memory list and the persisted store. In-progress downloads keep running
+    /// (their persisted row survives and re-upserts on completion).
+    func clearFinished() {
+        finished.removeAll()
+        Task { await DownloadStore.shared.clearFinished() }
+    }
 
-    /// Remove a single finished entry from the list (the row's ✕ when not running).
-    func remove(_ item: DownloadItem) { finished.removeAll { $0 === item } }
+    /// Remove a single finished entry from the list and the store (row's ✕).
+    func remove(_ item: DownloadItem) {
+        finished.removeAll { $0 === item }
+        let id = item.id.uuidString
+        Task { await DownloadStore.shared.delete(id: id) }
+    }
+
+    /// Load persisted downloads at launch: migrate any prior-run in-progress rows to
+    /// interrupted, prune past the retention window, then populate `finished`.
+    func loadPersisted() async {
+        await DownloadStore.shared.migrateInterruptedOnLaunch()
+        await DownloadStore.shared.prune(olderThan: Date().addingTimeInterval(-DownloadStore.retentionInterval))
+        let records = await DownloadStore.shared.all()
+        // Keep any items added during the brief launch window on top; dedupe by id
+        // so a download that finished mid-load isn't listed twice.
+        let existingIDs = Set(finished.map(\.id))
+        let loaded = records.map { DownloadItem(record: $0) }.filter { !existingIDs.contains($0.id) }
+        finished = finished + loaded
+    }
+
+    /// Persist a snapshot of `item` (insert on start, update on terminal events).
+    private func persist(_ item: DownloadItem) {
+        let record = item.makeRecord()
+        Task { await DownloadStore.shared.upsert(record) }
+    }
 
     /// An active item's byte counts changed. The `active` array reference is
     /// unchanged, so nudge our own observers (the rail icon's aggregate ring)
@@ -128,10 +207,11 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
     }
 
     func cancel(_ item: DownloadItem) {
-        item.download.cancel { _ in }   // discard resume data (slice A)
+        item.download?.cancel { _ in }   // discard resume data
         item.markState(.cancelled)
         downloadLog("cancelled \(item.filename)")
         moveToFinished(item)
+        persist(item)
     }
 
     // MARK: - WKDownloadDelegate
@@ -147,8 +227,9 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
             let destination = Self.uniqueDownloadsURL(forSuggestedName: suggestedFilename)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    if let destination {
-                        item?.setDestination(destination)
+                    if let destination, let item {
+                        item.setDestination(destination)
+                        self.persist(item)   // write an inProgress row now (interrupted-on-quit detection)
                         self.downloadLog("started \(destination.lastPathComponent)")
                     } else {
                         self.downloadLog("started \(suggestedFilename) — no destination")
@@ -164,7 +245,8 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
         item.markState(.completed)
         downloadLog("finished \(item.filename)")
         moveToFinished(item)
-        hasUnacknowledgedCompletion = true   // rail icon turns green until acknowledged
+        persist(item)
+        hasUnacknowledgedCompletion = true   // rail icon ring turns green until acknowledged
         // Note: deliberately do NOT open the file (no auto-open).
     }
 
@@ -173,6 +255,7 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
         item.markState(.failed)
         downloadLog("failed \(item.filename) — \(error.localizedDescription)")
         moveToFinished(item)
+        persist(item)
     }
 
     // MARK: - Helpers
