@@ -616,6 +616,19 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
                 return
             }
 
+            // Tracking-param stripping (Stage-1): only user-initiated GET navigations
+            // (address bar / link clicks), never forms/POSTs/redirects — so it can't
+            // touch auth/session params. Re-entry with the clean URL is idempotent.
+            if TrackingParams.shouldStrip(navigationAction, chainInFlight: tab.navigationChainInFlight),
+               let cleaned = TrackingParams.stripped(from: url) {
+                decisionHandler(.cancel)
+                #if DEBUG
+                print("[Tracking] stripped params: \(url.absoluteString) → \(cleaned.absoluteString)")
+                #endif
+                webView.load(URLRequest(url: cleaned))
+                return
+            }
+
             let wantPersistent = TrustStore.shared.isTrusted(host: url.host)
             // Redirect-chain guard (slice C): a `.other` navigation while a chain is
             // already in flight is a redirect hop (e.g. an OAuth 302). Do NOT rebind
