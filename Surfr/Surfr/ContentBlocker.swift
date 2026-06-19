@@ -47,27 +47,44 @@ final class ContentBlocker {
 
     private let cacheMaxAge: TimeInterval = 24 * 60 * 60   // ~24h
 
+    /// First-paint gate: true once every list's last-good (cache/seed) has been
+    /// applied — fast, no network. `waitUntilReady`/`loadGated` block the very first
+    /// page load until this flips so the first tab can't paint un-blocked.
+    private var ready = false
+    private var readyWaiters: [CheckedContinuation<Void, Never>] = []
+
     private init() {}
 
     // MARK: - Lifecycle
 
-    /// Prepare every list. Each list independently applies its best last-good
-    /// immediately, then refreshes if stale. Lists run concurrently. Safe to call
-    /// repeatedly; only the first call does work.
+    /// Prepare every list in two phases:
+    ///  1. apply each list's last-good (cache, else bundled seed) — no network, so
+    ///     it completes in ~ms; on finishing, the first-paint gate opens;
+    ///  2. refresh stale lists from the network (may take time; NOT gated).
+    /// Lists run concurrently within each phase. Safe to call repeatedly.
     func prepare() async {
         guard !prepared else { return }
         prepared = true
 
+        // Phase 1 — last-good, gated.
         await withTaskGroup(of: Void.self) { group in
             for source in sources {
-                group.addTask { await self.prepareList(source) }
+                group.addTask { await self.applyLastGood(source) }
+            }
+        }
+        markReady()   // seed/cache applied → first paint may proceed
+
+        // Phase 2 — network refresh, ungated.
+        await withTaskGroup(of: Void.self) { group in
+            for source in sources {
+                group.addTask { await self.refreshIfStale(source) }
             }
         }
     }
 
-    private func prepareList(_ s: Source) async {
-        // 1. Protect from the earliest moment using the best on-disk source that
-        //    needs no network: a cached conversion if present, else the seed.
+    /// Protect from the earliest moment using the best on-disk source that needs no
+    /// network: a cached conversion if present, else the bundled seed.
+    private func applyLastGood(_ s: Source) async {
         if let cached = loadCache(s) {
             let count = await ruleCount(of: cached.json)
             let ok = await compileAndApply(s, json: cached.json,
@@ -76,14 +93,49 @@ final class ContentBlocker {
         } else {
             await applySeed(s)
         }
+    }
 
-        // 2. Refresh from the network when the cache is missing/stale (or when the
-        //    debug force-fail toggle is set, so the failure path is reachable even
-        //    with a fresh cache). Any failure keeps this list's last-good in place.
+    /// Refresh from the network when the cache is missing/stale (or when the debug
+    /// force-fail toggle is set, so the failure path is reachable even with a fresh
+    /// cache). Any failure keeps this list's last-good in place.
+    private func refreshIfStale(_ s: Source) async {
         if isCacheStale(s) || forceFetchFailure {
             await refresh(s)
         } else {
             log("\(s.name): cache is fresh (< 24h); skipping fetch")
+        }
+    }
+
+    // MARK: - First-paint gate
+
+    /// Open the gate and wake any pending first loads. Idempotent. Always called
+    /// after phase 1 (even if a seed compile failed), so loads never hang.
+    private func markReady() {
+        guard !ready else { return }
+        ready = true
+        let waiters = readyWaiters
+        readyWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
+    /// Suspend until the last-good lists have been applied (or return immediately if
+    /// already). Used to gate the first page load at cold start.
+    func waitUntilReady() async {
+        if ready { return }
+        await withCheckedContinuation { readyWaiters.append($0) }
+    }
+
+    /// Load `url` in `webView`, but at cold start hold the very first load until the
+    /// seed/cache is applied so first paint is deterministically blocked. After the
+    /// gate opens (within ms of launch), this loads immediately with no overhead.
+    func loadGated(_ url: URL, in webView: WKWebView) {
+        if ready {
+            webView.load(URLRequest(url: url))
+        } else {
+            Task { @MainActor in
+                await waitUntilReady()
+                webView.load(URLRequest(url: url))
+            }
         }
     }
 

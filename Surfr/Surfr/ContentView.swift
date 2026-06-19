@@ -120,7 +120,7 @@ final class Tab: ObservableObject, Identifiable {
         self.webView = adopting ?? Tab.makeWebView(persistent: persistent)
         configureCurrentWebView()
         if load, adopting == nil {
-            webView.load(URLRequest(url: url))
+            ContentBlocker.shared.loadGated(url, in: webView)   // first paint gated on seed (slice C)
         }
     }
 
@@ -176,7 +176,7 @@ final class Tab: ObservableObject, Identifiable {
     func navigate(to newURL: URL) {
         url = newURL
         addressText = newURL.absoluteString
-        webView.load(URLRequest(url: newURL))
+        ContentBlocker.shared.loadGated(newURL, in: webView)   // first paint gated on seed (slice C)
     }
 
     /// Swap this tab's web view onto the requested store, keeping the same `Tab`
