@@ -20,14 +20,33 @@ struct TrustedBadge: View {
     }
 }
 
+/// Amber "not secure" badge for a host currently on an insecure (http) page. Same
+/// corner/size language as `TrustedBadge` (the two are mutually exclusive — http
+/// can't be trusted): a white ⚠-with-! glyph on a filled amber capsule.
+struct InsecureBadge: View {
+    var body: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .font(.system(size: 8, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 2.5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(Color.orange))
+            .help("Not secure — this page is loaded over an insecure (http) connection")
+    }
+}
+
 /// One trust toast (slice C1 indicators, part 2). Shown only on the explicit
 /// trust/untrust action, never on revisits to an already-trusted site.
 struct TrustToast: Identifiable, Equatable {
+    enum Kind: Equatable {
+        case trusting          // green confirmation: now trusting
+        case untrusting        // neutral: stopped trusting
+        case blockedInsecure   // amber warning: can't trust an http site
+    }
     let id = UUID()
-    /// The trusted registrable domain (e.g. "google.com").
+    /// The registrable domain (e.g. "google.com").
     let domain: String
-    /// true → "Now trusting …"; false → "Stopped trusting …".
-    let trusting: Bool
+    let kind: Kind
 }
 
 /// The toast overlay: favicon + message + (when trusting) the green badge, with a
@@ -43,25 +62,30 @@ struct TrustToastView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            icon
+            leading
                 .frame(width: 24, height: 24)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
 
             VStack(alignment: .leading, spacing: 1) {
-                if toast.trusting {
+                switch toast.kind {
+                case .trusting:
                     Text("Now trusting \(toast.domain)")
                         .font(.callout).fontWeight(.semibold).lineLimit(1)
                     Text("stays logged in")
                         .font(.caption2).foregroundStyle(.secondary)
-                } else {
+                case .untrusting:
                     Text("Stopped trusting \(toast.domain)")
                         .font(.callout).fontWeight(.semibold).lineLimit(1)
                     Text("session is now ephemeral")
                         .font(.caption2).foregroundStyle(.secondary)
+                case .blockedInsecure:
+                    Text("Can't trust an insecure site")
+                        .font(.callout).fontWeight(.semibold).lineLimit(1)
+                    Text("Staying logged in needs a secure (HTTPS) connection")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                 }
             }
 
-            if toast.trusting { TrustedBadge() }
+            if toast.kind == .trusting { TrustedBadge() }
 
             Button(action: onClose) {
                 Image(systemName: "xmark").font(.caption2).foregroundStyle(.secondary)
@@ -72,13 +96,28 @@ struct TrustToastView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.gray.opacity(0.2)))
+        // Amber border for the warning variant; subtle gray otherwise.
+        .overlay(RoundedRectangle(cornerRadius: 12)
+            .strokeBorder(toast.kind == .blockedInsecure ? Color.orange.opacity(0.7) : Color.gray.opacity(0.2),
+                          lineWidth: toast.kind == .blockedInsecure ? 1.5 : 1))
         .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
         .frame(maxWidth: 320)
         // The whole toast is also click-to-dismiss.
         .contentShape(Rectangle())
         .onTapGesture(perform: onClose)
         .task(id: host) { await loadIcon() }
+    }
+
+    /// Leading visual: an amber warning triangle for the blocked case, else the
+    /// site favicon.
+    @ViewBuilder private var leading: some View {
+        if toast.kind == .blockedInsecure {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 20))
+                .foregroundStyle(.orange)
+        } else {
+            icon.clipShape(RoundedRectangle(cornerRadius: 6))
+        }
     }
 
     @ViewBuilder private var icon: some View {

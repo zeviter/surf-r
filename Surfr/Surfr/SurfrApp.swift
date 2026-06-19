@@ -18,14 +18,20 @@ struct SurfrApp: App {
     /// future editor remaps a key (slice 9a — overrides empty by default).
     @ObservedObject private var shortcuts = ShortcutRegistry.shared
 
-    /// The active tab's host (tracked via `BookmarkState.activeURL`), if it's a
-    /// real web page the trust command can act on.
-    /// Only HTTPS pages are trustable — the trust command is disabled on http
-    /// (insecure) pages so they can't be promoted into the persistent store.
-    private var activeHost: String? {
+    /// The active tab's host if it's a real web page (http or https). Enables the
+    /// trust command so ⌘⇧T is reachable even on an insecure page — the action is
+    /// blocked in the handler (with a warning toast), not by disabling the menu.
+    private var activeWebHost: String? {
         guard let url = bookmarks.activeURL, let host = url.host, !host.isEmpty,
-              url.scheme?.lowercased() == "https" else { return nil }
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
         return host
+    }
+
+    /// Host only when it's an HTTPS page — used for the trust-state menu title (an
+    /// http page is never trusted, so it always shows "Trust This Site").
+    private var activeHTTPSHost: String? {
+        guard let url = bookmarks.activeURL, url.scheme?.lowercased() == "https" else { return nil }
+        return activeWebHost
     }
 
     var body: some Scene {
@@ -96,13 +102,13 @@ struct SurfrApp: App {
 
                 // Slice C1: trust the active site's domain so its session persists
                 // (shared persistent store). Disabled when there's no real page.
-                Button(trust.isTrusted(host: activeHost)
+                Button(trust.isTrusted(host: activeHTTPSHost)
                        ? "Stop Trusting This Site"
                        : "Trust This Site (Stay Logged In)") {
                     NotificationCenter.default.post(name: .toggleTrust, object: nil)
                 }
                 .appShortcut(.trustSite, shortcuts)
-                .disabled(activeHost == nil)
+                .disabled(activeWebHost == nil)
 
                 Divider()
 

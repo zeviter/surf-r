@@ -207,6 +207,7 @@ struct HostGroup: Identifiable {
     let tabCount: Int
     let representativeTabID: Tab.ID   // most-recently-active tab in this host
     let isActive: Bool               // contains the active tab
+    let isInsecure: Bool             // representative tab is on an http (user-continued) page
     var id: String { host }
 }
 
@@ -530,7 +531,8 @@ final class BrowserState: ObservableObject {
                 host: host,
                 tabCount: hostTabs.count,
                 representativeTabID: representative.id,
-                isActive: hostTabs.contains { $0.id == activeTabID }
+                isActive: hostTabs.contains { $0.id == activeTabID },
+                isInsecure: representative.url.scheme?.lowercased() == "http"
             )
         }
         groups.sort { (hostCreationOrder[$0.host] ?? 0) < (hostCreationOrder[$1.host] ?? 0) }
@@ -924,6 +926,8 @@ struct FaviconTile: View {
     let host: String
     let isActive: Bool
     let tabCount: Int
+    /// True when this host's current page is insecure (http, user-continued).
+    let isInsecure: Bool
     let onTap: () -> Void
     /// Addition 1: close every tab in this host group (right-click item — also
     /// reaches single-tab hosts, which never open the flyout).
@@ -959,12 +963,14 @@ struct FaviconTile: View {
             }
         }
         .frame(width: 40, height: 40)
-        // Trusted check in the top-RIGHT corner (count badge stays bottom-right, so
-        // they never collide). Positioned INSIDE the 40×40 frame — the same margin
-        // the favicon sits within — so it isn't clipped by the rail/scroll edges
-        // (the old top-leading negative offset poked outside and got cut off).
+        // Top-RIGHT corner badge (count badge stays bottom-right, so they never
+        // collide). Insecure and trusted are mutually exclusive — http can't be
+        // trusted — so they share this corner: amber ⚠ when insecure, green ✓ when
+        // trusted, neither otherwise. Inset inside the 40×40 frame so it isn't clipped.
         .overlay(alignment: .topTrailing) {
-            if trustStore.isTrusted(host: host) {
+            if isInsecure {
+                InsecureBadge().offset(x: -1, y: 1)
+            } else if trustStore.isTrusted(host: host) {
                 TrustedBadge().offset(x: -1, y: 1)
             }
         }
@@ -1126,6 +1132,7 @@ struct RailView: View {
                             host: group.host,
                             isActive: group.isActive,
                             tabCount: group.tabCount,
+                            isInsecure: group.isInsecure,
                             onTap: {
                                 // Single-tab host switches directly; multi-tab opens the flyout.
                                 if group.tabCount >= 2 {
@@ -1571,22 +1578,26 @@ struct ContentView: View {
         // data is cleared by `TrustStore.untrust`.
         .onReceive(NotificationCenter.default.publisher(for: .toggleTrust)) { _ in
             let tab = browser.activeTab
-            // Only HTTPS origins can be trusted into the persistent store — an
-            // insecure http page must never be promoted out of the ephemeral store.
             guard let url = tab.url as URL?, let host = url.host, !host.isEmpty,
-                  url.scheme?.lowercased() == "https" else { return }
+                  let scheme = url.scheme?.lowercased() else { return }
+            let domain = TrustStore.registrableDomain(for: host)
+            // Insecure http can't be trusted (stays ephemeral) — explain, don't no-op.
+            if scheme == "http" {
+                showTrustToast(TrustToast(domain: domain, kind: .blockedInsecure))
+                return
+            }
+            guard scheme == "https" else { return }   // non-web schemes: ignore
             // Decide from the state BEFORE mutating; the toast fires only on this
             // explicit action (never on revisits to an already-trusted site).
             let wasTrusted = TrustStore.shared.isTrusted(host: host)
-            let domain = TrustStore.registrableDomain(for: host)
             if wasTrusted {
                 TrustStore.shared.untrust(host: host)
                 browser.rebind(tab, to: url, persistent: false)
-                showTrustToast(TrustToast(domain: domain, trusting: false))
+                showTrustToast(TrustToast(domain: domain, kind: .untrusting))
             } else {
                 TrustStore.shared.trust(host: host)
                 browser.rebind(tab, to: url, persistent: true)
-                showTrustToast(TrustToast(domain: domain, trusting: true))
+                showTrustToast(TrustToast(domain: domain, kind: .trusting))
             }
         }
         // Addition 3: keyboard ⌘[ / ⌘] back/forward on the active tab's web view.
