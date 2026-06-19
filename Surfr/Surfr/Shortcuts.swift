@@ -3,7 +3,7 @@ import Combine
 
 /// Stable identity for every app shortcut (used as the persistence key).
 enum ShortcutID: String, CaseIterable, Codable {
-    case newTab, closeTab, openLocation
+    case newTab, closeTab, closeWindow, openLocation
     case reload, hardReload, emptyCacheReload
     case back, forward
     case bookmark, trustSite
@@ -162,6 +162,7 @@ final class ShortcutRegistry: ObservableObject {
         // Tabs
         .init(id: .newTab,           name: "New Tab",                    category: .tabs,       defaultCombo: c("t", [.command])),
         .init(id: .closeTab,         name: "Close Tab",                  category: .tabs,       defaultCombo: c("w", [.command])),
+        .init(id: .closeWindow,      name: "Close Window",               category: .tabs,       defaultCombo: c("w", [.command, .shift])),
         // Navigation
         .init(id: .openLocation,     name: "Open Location…",             category: .navigation, defaultCombo: c("l", [.command])),
         .init(id: .reload,           name: "Reload Page",                category: .navigation, defaultCombo: c("r", [.command])),

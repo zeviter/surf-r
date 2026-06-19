@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 @main
 struct SurfrApp: App {
@@ -43,6 +44,14 @@ struct SurfrApp: App {
                     NotificationCenter.default.post(name: .closeTab, object: nil)
                 }
                 .appShortcut(.closeTab, shortcuts)
+
+                // ⌘W is authoritative for Close Tab (verified: AppKit's window-close
+                // is auto-stripped of ⌘W and left shortcut-less). Give window-close
+                // the browser-standard ⌘⇧W so it's still keyboard-reachable.
+                Button("Close Window") {
+                    NSApp.keyWindow?.performClose(nil)
+                }
+                .appShortcut(.closeWindow, shortcuts)
 
                 Divider()
 
