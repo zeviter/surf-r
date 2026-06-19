@@ -52,6 +52,7 @@ final class DownloadItem: ObservableObject, Identifiable {
                     guard let self else { return }
                     self.receivedBytes = received
                     self.totalBytes = total
+                    DownloadManager.shared.itemProgressDidChange()   // refresh rail ring
                     #if DEBUG
                     print("[Download] progress \(self.filename) \(received)/\(total > 0 ? "\(total)" : "?") bytes")
                     #endif
@@ -87,11 +88,32 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
     @Published private(set) var active: [DownloadItem] = []
     /// Completed / failed / cancelled downloads, most recent first.
     @Published private(set) var finished: [DownloadItem] = []
+    /// True once a download has completed without the popover being opened since.
+    /// Drives the rail icon's green "completed" tint; cleared on `acknowledge()`.
+    @Published private(set) var hasUnacknowledgedCompletion = false
 
     /// Maps a live `WKDownload` to its tracked item for delegate callbacks.
     private var itemsByDownload: [ObjectIdentifier: DownloadItem] = [:]
 
     private override init() { super.init() }
+
+    // MARK: - UI actions (slice 2b)
+
+    /// Opening the downloads popover acknowledges any completed downloads, so the
+    /// rail icon reverts from green to idle.
+    func acknowledge() { hasUnacknowledgedCompletion = false }
+
+    /// "Clear all": drop every finished/failed/cancelled entry. In-progress
+    /// downloads are untouched and keep running.
+    func clearFinished() { finished.removeAll() }
+
+    /// Remove a single finished entry from the list (the row's ✕ when not running).
+    func remove(_ item: DownloadItem) { finished.removeAll { $0 === item } }
+
+    /// An active item's byte counts changed. The `active` array reference is
+    /// unchanged, so nudge our own observers (the rail icon's aggregate ring)
+    /// to recompute. Rows in the popover observe their item directly.
+    func itemProgressDidChange() { objectWillChange.send() }
 
     /// Called from the navigation delegate's `…didBecome download:` hooks. Sets us
     /// as the download's delegate and starts tracking it.
@@ -142,6 +164,7 @@ final class DownloadManager: NSObject, ObservableObject, WKDownloadDelegate {
         item.markState(.completed)
         downloadLog("finished \(item.filename)")
         moveToFinished(item)
+        hasUnacknowledgedCompletion = true   // rail icon turns green until acknowledged
         // Note: deliberately do NOT open the file (no auto-open).
     }
 

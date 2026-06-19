@@ -642,13 +642,7 @@ struct FaviconTile: View {
             .frame(width: Self.size, height: Self.size)
 
             if tabCount >= 2 {
-                Text(tabCount > 99 ? "99+" : "\(tabCount)")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 3)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.blue))
-                    .offset(x: 3, y: 3)
+                CountBadge(count: tabCount).offset(x: 3, y: 3)
             }
         }
         .frame(width: 40, height: 40)
@@ -715,6 +709,8 @@ struct RailView: View {
     @ObservedObject var browser: BrowserState
     /// Host whose tab flyout is currently open (nil = none). UI-only state.
     @State private var flyoutHost: String?
+    /// Whether the downloads manager popover is open. UI-only state.
+    @State private var showDownloads = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -737,6 +733,15 @@ struct RailView: View {
             }
             .buttonStyle(.plain)
             .help("New Tab (⌘T)")
+
+            // Downloads — manager popover; icon reflects active/completed/idle state.
+            DownloadsRailIcon {
+                showDownloads = true
+                DownloadManager.shared.acknowledge()   // opening clears the green state
+            }
+            .popover(isPresented: $showDownloads, arrowEdge: .trailing) {
+                DownloadsPopover()
+            }
 
             Divider().frame(width: 30)
 
