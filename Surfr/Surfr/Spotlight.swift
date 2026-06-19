@@ -261,7 +261,6 @@ struct OmniboxField: NSViewRepresentable {
 
 /// Centered floating panel over a dimmed page; Esc / click-outside dismiss.
 struct SpotlightOverlay: View {
-    let currentURL: URL
     /// Increments on every ⌘L summon so focus + select-all re-fires each time,
     /// even if SwiftUI reuses the field's coordinator across summons.
     let focusToken: Int
@@ -270,12 +269,13 @@ struct SpotlightOverlay: View {
 
     @State private var text: String
 
-    init(currentURL: URL, focusToken: Int, onNavigate: @escaping (URL, Bool) -> Void, onClose: @escaping () -> Void) {
-        self.currentURL = currentURL
+    /// `initialText` is the current URL on a loaded page (pre-filled, auto-selected)
+    /// and "" on internal pages (history/trusted/etc.) where there's no URL.
+    init(initialText: String, focusToken: Int, onNavigate: @escaping (URL, Bool) -> Void, onClose: @escaping () -> Void) {
         self.focusToken = focusToken
         self.onNavigate = onNavigate
         self.onClose = onClose
-        _text = State(initialValue: currentURL.absoluteString)
+        _text = State(initialValue: initialText)
     }
 
     var body: some View {

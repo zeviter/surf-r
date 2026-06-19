@@ -46,6 +46,7 @@ final class Tab: ObservableObject, Identifiable {
         case web
         case history
         case trustedSites
+        case shortcuts
     }
 
     let id = UUID()
@@ -268,6 +269,9 @@ final class BrowserState: ObservableObject {
     /// Open the Trusted Sites page (rail shield icon / ⌘⇧Y).
     func openTrustedSitesPage() { openInternalPage(.trustedSites, title: "Trusted Sites") }
 
+    /// Open the Keyboard Shortcuts page (⌘/ or the popover's "See all"; slice 9b).
+    func openShortcutsPage() { openInternalPage(.shortcuts, title: "Keyboard Shortcuts") }
+
     /// Open an internal-page surface: if one of this kind is already open, switch to
     /// it (no duplicate); otherwise create it. It's a host-less page — not in the
     /// rail favicon stack and not discarded as pristine.
@@ -280,6 +284,26 @@ final class BrowserState: ObservableObject {
             wire(tab)
             activeTabID = tab.id
         }
+    }
+
+    /// Navigate the active tab to `url` (Enter from the omnibox). A web tab loads in
+    /// place. An internal page (history/trusted/etc.) can't load a web page in its
+    /// own view, so it "gives way": we replace it in its slot with a fresh web tab.
+    func navigateActiveTab(to url: URL) {
+        let active = activeTab
+        if active.kind == .web {
+            active.navigate(to: url)
+            return
+        }
+        let webTab = Tab(url: url)
+        if let idx = tabs.firstIndex(where: { $0.id == active.id }) {
+            tabs[idx] = webTab
+        } else {
+            tabs.append(webTab)
+        }
+        tabURLBindings[active.id] = nil
+        wire(webTab)
+        activeTabID = webTab.id   // didSet rebinds + recomputes; old internal tab is gone
     }
 
     /// Open `url` in a new foreground tab (⌘Enter from the omnibox).
@@ -890,6 +914,8 @@ struct RailView: View {
     @State private var flyoutHost: String?
     /// Whether the downloads manager popover is open. UI-only state.
     @State private var showDownloads = false
+    /// Whether the shortcuts cheatsheet popover is open. UI-only state.
+    @State private var showShortcuts = false
 
     /// Default pinned order (slice 9a): history → downloads → trusted → new tab.
     var body: some View {
@@ -912,6 +938,18 @@ struct RailView: View {
             railIconButton("checkmark.shield", help: "Trusted Sites",
                            isActive: browser.activeTab.kind == .trustedSites,
                            action: browser.openTrustedSitesPage)
+
+            // Shortcuts — opens a cheatsheet popover (9b); green when the shortcuts
+            // page is the active surface. The popover's "See all" / ⌘/ open the page.
+            railIconButton("keyboard", help: "Keyboard Shortcuts",
+                           isActive: browser.activeTab.kind == .shortcuts,
+                           action: { showShortcuts = true })
+                .popover(isPresented: $showShortcuts, arrowEdge: .trailing) {
+                    ShortcutsCheatsheet {
+                        showShortcuts = false
+                        browser.openShortcutsPage()
+                    }
+                }
 
             // New tab — same behaviour as ⌘T. Green while the new-tab page is active.
             railIconButton("plus", help: "New Tab (⌘T)",
@@ -1126,6 +1164,8 @@ struct ActiveTabContent: View {
             HistoryPage(onOpenURL: { onNavigate($0, true) })
         case .trustedSites:
             TrustedSitesPage(onOpenURL: { onNavigate($0, true) })
+        case .shortcuts:
+            ShortcutsPage()   // view-only (9b); editing is 9b2
         case .web:
             if tab.hasNavigated {
                 WebView(webView: tab.webView)
@@ -1161,10 +1201,7 @@ private struct BrowserCommandHandlers: ViewModifier {
                 browser.openTrustedSitesPage()
             }
             .onReceive(NotificationCenter.default.publisher(for: .openShortcuts)) { _ in
-                // Stub: the shortcuts page is slice 9b. ⌘/ is registered + reaches here.
-                #if DEBUG
-                print("[Shortcuts] open requested — page lands in 9b")
-                #endif
+                browser.openShortcutsPage()   // ⌘/ opens the full page (9b)
             }
     }
 
@@ -1214,7 +1251,7 @@ struct ContentView: View {
                 // Context A: the summoned overlay, over the dimmed page. The
                 // per-summon token id forces a fresh field + focus each time.
                 if showSpotlight {
-                    SpotlightOverlay(currentURL: browser.activeTab.url, focusToken: spotlightToken,
+                    SpotlightOverlay(initialText: spotlightPrefill, focusToken: spotlightToken,
                                      onNavigate: navigate, onClose: closeSpotlight)
                         .id(spotlightToken)
                 }
@@ -1278,12 +1315,17 @@ struct ContentView: View {
             Task { await BookmarkState.shared.toggle(url: url, title: title) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusOmnibox)) { _ in
-            // ⌘L: summon the overlay on a loaded page; focus the box on the new-tab page.
-            if browser.activeTab.hasNavigated {
+            // ⌘L is context-aware (Task 1):
+            //  • new-tab page → focus the permanent box;
+            //  • loaded web page → overlay pre-filled with the URL (see `spotlightPrefill`);
+            //  • any internal surface (history/trusted/downloads/shortcuts) → overlay, empty.
+            // The else-branch covers every non-new-tab surface, so future internal
+            // pages get ⌘L for free.
+            if browser.activeTab.kind == .web && !browser.activeTab.hasNavigated {
+                newTabFocusToken += 1
+            } else {
                 spotlightToken += 1   // re-focus the overlay on every summon
                 showSpotlight = true
-            } else {
-                newTabFocusToken += 1
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .newTab)) { _ in
@@ -1361,12 +1403,19 @@ struct ContentView: View {
         }
     }
 
+    /// The ⌘L overlay pre-fill: the current URL on a loaded web page, empty on the
+    /// new-tab page and on internal surfaces (no URL to pre-fill).
+    private var spotlightPrefill: String {
+        let tab = browser.activeTab
+        return (tab.kind == .web && tab.hasNavigated) ? tab.url.absoluteString : ""
+    }
+
     /// Enter → navigate the current tab; ⌘Enter → open in a new foreground tab.
     private func navigate(_ url: URL, newTab: Bool) {
         if newTab {
             browser.openInNewTab(url)
         } else {
-            browser.activeTab.navigate(to: url)
+            browser.navigateActiveTab(to: url)   // internal pages give way to the web page
         }
     }
 
