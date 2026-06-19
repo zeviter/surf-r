@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	App Transport Security: scoped exemption for WebKit-rendered content only.
+	HTTPS-only mode upgrades http→https by default and shows an interstitial on
+	failure; this key lets WKWebView actually load http ONLY when the user
+	explicitly chooses "Continue to the insecure site" (otherwise ATS -1022 blocks
+	it at the OS layer). It is scoped to web-view content — the app's own URLSession
+	traffic (e.g. blocklist fetches) keeps full ATS. We deliberately do NOT set the
+	broad NSAllowsArbitraryLoads. WebKit's mixed-content blocking is a separate
+	web-security policy and is unaffected by this key.
+	-->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
+</dict>
+</plist>

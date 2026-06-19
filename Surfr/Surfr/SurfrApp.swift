@@ -20,9 +20,11 @@ struct SurfrApp: App {
 
     /// The active tab's host (tracked via `BookmarkState.activeURL`), if it's a
     /// real web page the trust command can act on.
+    /// Only HTTPS pages are trustable — the trust command is disabled on http
+    /// (insecure) pages so they can't be promoted into the persistent store.
     private var activeHost: String? {
         guard let url = bookmarks.activeURL, let host = url.host, !host.isEmpty,
-              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+              url.scheme?.lowercased() == "https" else { return nil }
         return host
     }
 

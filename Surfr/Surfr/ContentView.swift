@@ -428,9 +428,18 @@ final class BrowserState: ObservableObject {
             let trimmed = tab.title.trimmingCharacters(in: .whitespacesAndNewlines)
             base = trimmed.isEmpty ? "Surfr" : trimmed
         }
-        if tab.hasNavigated, let host = tab.url.host, TrustStore.shared.isTrusted(host: host) {
-            let primary = TrustStore.primaryLabel(forDomain: TrustStore.registrableDomain(for: host))
-            windowTitle = "\(base) · Trusted: \(primary)"
+        // Persistent indicators (mutually exclusive — an http page is never trusted):
+        //  • insecure http page the user continued to → "Not Secure";
+        //  • trusted https domain → "Trusted: <Domain>".
+        if tab.hasNavigated, let host = tab.url.host {
+            if tab.url.scheme?.lowercased() == "http" {
+                windowTitle = "\(base) · ⚠ Not Secure"
+            } else if TrustStore.shared.isTrusted(host: host) {
+                let primary = TrustStore.primaryLabel(forDomain: TrustStore.registrableDomain(for: host))
+                windowTitle = "\(base) · Trusted: \(primary)"
+            } else {
+                windowTitle = base
+            }
         } else {
             windowTitle = base
         }
@@ -629,7 +638,10 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
                 return
             }
 
-            let wantPersistent = TrustStore.shared.isTrusted(host: url.host)
+            // Persistent store requires BOTH a trusted domain AND https — an insecure
+            // http page (only reachable via explicit "continue insecurely") never
+            // enters the persistent store, even on an otherwise-trusted domain.
+            let wantPersistent = scheme == "https" && TrustStore.shared.isTrusted(host: url.host)
             // Redirect-chain guard (slice C): a `.other` navigation while a chain is
             // already in flight is a redirect hop (e.g. an OAuth 302). Do NOT rebind
             // mid-chain, or the login lands in the wrong store ("cookies not
@@ -705,11 +717,11 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
         // settled on a host whose trust wants the *other* store (e.g. trusted A
         // redirected to and stayed on untrusted D). Reconcile now — once, after the
         // chain ends — so the dwelt-on page ends up in the correct store, without
-        // having rebound mid-chain. OAuth flows that return to the trusted origin
-        // match and skip this. Trust is stable per load, so this converges.
-        if let browser, let tab,
-           TrustStore.shared.isTrusted(host: host) != tab.usesPersistentStore {
-            browser.rebind(tab, to: url, persistent: TrustStore.shared.isTrusted(host: host))
+        // having rebound mid-chain. The persistent store requires https too, so an
+        // insecure http page on a trusted domain settles ephemeral, never persistent.
+        let wantPersistent = scheme == "https" && TrustStore.shared.isTrusted(host: host)
+        if let browser, let tab, wantPersistent != tab.usesPersistentStore {
+            browser.rebind(tab, to: url, persistent: wantPersistent)
             return
         }
 
@@ -1559,8 +1571,10 @@ struct ContentView: View {
         // data is cleared by `TrustStore.untrust`.
         .onReceive(NotificationCenter.default.publisher(for: .toggleTrust)) { _ in
             let tab = browser.activeTab
+            // Only HTTPS origins can be trusted into the persistent store — an
+            // insecure http page must never be promoted out of the ephemeral store.
             guard let url = tab.url as URL?, let host = url.host, !host.isEmpty,
-                  let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
+                  url.scheme?.lowercased() == "https" else { return }
             // Decide from the state BEFORE mutating; the toast fires only on this
             // explicit action (never on revisits to an already-trusted site).
             let wasTrusted = TrustStore.shared.isTrusted(host: host)
