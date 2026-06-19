@@ -184,6 +184,12 @@ final class BrowserState: ObservableObject {
         activeTabID = tab.id   // didSet bumps activation, discards prior pristine, recomputes
     }
 
+    /// Open `url` in a new foreground tab (⌘Enter from the omnibox).
+    func openInNewTab(_ url: URL) {
+        newTab()
+        activeTab.navigate(to: url)
+    }
+
     /// Close a tab; if it was the last one, keep the window alive with a fresh tab.
     func closeTab(_ id: Tab.ID) {
         guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
@@ -515,23 +521,6 @@ struct WebView: NSViewRepresentable {
 }
 
 /// The address bar for the active tab. Observes the tab so it reflects live URL changes.
-struct OmniboxBar: View {
-    @ObservedObject var tab: Tab
-    @FocusState.Binding var focused: Bool
-
-    var body: some View {
-        TextField("Search DuckDuckGo or enter address", text: $tab.addressText)
-            .textFieldStyle(.roundedBorder)
-            .focused($focused)
-            .onSubmit {
-                guard let url = Omnibox.resolve(tab.addressText) else { return }
-                tab.navigate(to: url)
-                focused = false
-            }
-            .padding(8)
-    }
-}
-
 /// One host tile in the rail: favicon (or letter-tile fallback), active highlight,
 /// and a count badge when the host has ≥2 tabs. Clicking switches to the host's
 /// most-recently-active tab.
@@ -812,20 +801,40 @@ struct TabFlyoutRow: View {
 
 struct ContentView: View {
     @StateObject private var browser = BrowserState()
-    @FocusState private var omniboxFocused: Bool
+    /// Context A overlay presented (only on a loaded page).
+    @State private var showSpotlight = false
+    /// Bumped on every ⌘L so the overlay re-focuses + selects-all on each summon.
+    @State private var spotlightToken = 0
+    /// Bumped to focus the new-tab permanent box (Context B) on ⌘L.
+    @State private var newTabFocusToken = 0
 
     var body: some View {
         HStack(spacing: 0) {
             RailView(browser: browser)
             Divider()
-            VStack(spacing: 0) {
-                OmniboxBar(tab: browser.activeTab, focused: $omniboxFocused)
-                Divider()
-                WebView(webView: browser.activeTab.webView)
-                    .id(browser.activeTabID)
+            ZStack {
+                // The content area is either the new-tab page (pristine tab) or the
+                // loaded web view — no persistent address bar (zero chrome).
+                Group {
+                    if browser.activeTab.hasNavigated {
+                        WebView(webView: browser.activeTab.webView)
+                    } else {
+                        NewTabPage(tab: browser.activeTab, onNavigate: navigate, focusToken: newTabFocusToken)
+                    }
+                }
+                .id(browser.activeTabID)
+
+                // Context A: the summoned overlay, over the dimmed page. The
+                // per-summon token id forces a fresh field + focus each time.
+                if showSpotlight {
+                    SpotlightOverlay(currentURL: browser.activeTab.url, focusToken: spotlightToken,
+                                     onNavigate: navigate, onClose: closeSpotlight)
+                        .id(spotlightToken)
+                }
             }
         }
         .frame(minWidth: 800, minHeight: 600)
+        .onChange(of: browser.activeTabID) { _, _ in showSpotlight = false }
         .task {
             // Compile the bundled seed ad-block list and apply it to every tab.
             await ContentBlocker.shared.prepare()
@@ -860,15 +869,38 @@ struct ContentView: View {
             Task { await BookmarkState.shared.toggle(url: url, title: title) }
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusOmnibox)) { _ in
-            omniboxFocused = true
+            // ⌘L: summon the overlay on a loaded page; focus the box on the new-tab page.
+            if browser.activeTab.hasNavigated {
+                spotlightToken += 1   // re-focus the overlay on every summon
+                showSpotlight = true
+            } else {
+                newTabFocusToken += 1
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .newTab)) { _ in
             browser.newTab()
-            omniboxFocused = true
+            showSpotlight = false
+            newTabFocusToken += 1   // focus the fresh new-tab box
         }
         .onReceive(NotificationCenter.default.publisher(for: .closeTab)) { _ in
             browser.closeTab(browser.activeTabID)
         }
+    }
+
+    /// Enter → navigate the current tab; ⌘Enter → open in a new foreground tab.
+    private func navigate(_ url: URL, newTab: Bool) {
+        if newTab {
+            browser.openInNewTab(url)
+        } else {
+            browser.activeTab.navigate(to: url)
+        }
+    }
+
+    /// Close the overlay with no navigation and return focus to the web content.
+    private func closeSpotlight() {
+        showSpotlight = false
+        let webView = browser.activeTab.webView
+        DispatchQueue.main.async { webView.window?.makeFirstResponder(webView) }
     }
 }
 
