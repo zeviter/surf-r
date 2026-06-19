@@ -13,14 +13,30 @@
 		AA01000000000000000000C3 /* PublicSuffixList in Frameworks */ = {isa = PBXBuildFile; productRef = AA01000000000000000000C2 /* PublicSuffixList */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		00A5355C2FE607E000D009EB /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 00458F1E2FE4558900320D64 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 00458F252FE4558900320D64;
+			remoteInfo = Surfr;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		00458F262FE4558900320D64 /* Surfr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Surfr.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		00A535582FE607E000D009EB /* SurfrTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SurfrTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		00458F282FE4558900320D64 /* Surfr */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Surfr;
+			sourceTree = "<group>";
+		};
+		00A535592FE607E000D009EB /* SurfrTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SurfrTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -37,6 +53,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		00A535552FE607E000D009EB /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -44,6 +67,7 @@
 			isa = PBXGroup;
 			children = (
 				00458F282FE4558900320D64 /* Surfr */,
+				00A535592FE607E000D009EB /* SurfrTests */,
 				00458F272FE4558900320D64 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -52,6 +76,7 @@
 			isa = PBXGroup;
 			children = (
 				00458F262FE4558900320D64 /* Surfr.app */,
+				00A535582FE607E000D009EB /* SurfrTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -85,6 +110,29 @@
 			productReference = 00458F262FE4558900320D64 /* Surfr.app */;
 			productType = "com.apple.product-type.application";
 		};
+		00A535572FE607E000D009EB /* SurfrTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 00A5355E2FE607E000D009EB /* Build configuration list for PBXNativeTarget "SurfrTests" */;
+			buildPhases = (
+				00A535542FE607E000D009EB /* Sources */,
+				00A535552FE607E000D009EB /* Frameworks */,
+				00A535562FE607E000D009EB /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				00A5355D2FE607E000D009EB /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				00A535592FE607E000D009EB /* SurfrTests */,
+			);
+			name = SurfrTests;
+			packageProductDependencies = (
+			);
+			productName = SurfrTests;
+			productReference = 00A535582FE607E000D009EB /* SurfrTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -97,6 +145,10 @@
 				TargetAttributes = {
 					00458F252FE4558900320D64 = {
 						CreatedOnToolsVersion = 26.5;
+					};
+					00A535572FE607E000D009EB = {
+						CreatedOnToolsVersion = 26.5;
+						TestTargetID = 00458F252FE4558900320D64;
 					};
 				};
 			};
@@ -121,12 +173,20 @@
 			projectRoot = "";
 			targets = (
 				00458F252FE4558900320D64 /* Surfr */,
+				00A535572FE607E000D009EB /* SurfrTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		00458F242FE4558900320D64 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		00A535562FE607E000D009EB /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -143,7 +203,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		00A535542FE607E000D009EB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		00A5355D2FE607E000D009EB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 00458F252FE4558900320D64 /* Surfr */;
+			targetProxy = 00A5355C2FE607E000D009EB /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		00458F2F2FE4558A00320D64 /* Debug */ = {
@@ -348,6 +423,44 @@
 			};
 			name = Release;
 		};
+		00A5355F2FE607E000D009EB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zeviter.SurfrTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Surfr.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Surfr";
+			};
+			name = Debug;
+		};
+		00A535602FE607E000D009EB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zeviter.SurfrTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Surfr.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Surfr";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -365,6 +478,15 @@
 			buildConfigurations = (
 				00458F322FE4558A00320D64 /* Debug */,
 				00458F332FE4558A00320D64 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		00A5355E2FE607E000D009EB /* Build configuration list for PBXNativeTarget "SurfrTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				00A5355F2FE607E000D009EB /* Debug */,
+				00A535602FE607E000D009EB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
