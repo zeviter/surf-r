@@ -13,6 +13,11 @@ let package = Package(
     products: [
         .library(name: "SurfrCore", targets: ["SurfrCore"]),
     ],
+    dependencies: [
+        // Pinned to the EXACT version the app's Package.resolved carries (rev b83108d…) so the
+        // package and the app can't drift on GRDB.
+        .package(url: "https://github.com/groue/GRDB.swift", exact: "7.11.1"),
+    ],
     targets: [
         // Vendored Argon2id reference C (phc-winner-argon2, tag 20190702). See Sources/CArgon2/VENDORED.md.
         // Portable `ref.c` only — no SIMD `opt.c`, no CLI tools. publicHeadersPath exposes argon2.h.
@@ -23,7 +28,10 @@ let package = Package(
         ),
         .target(
             name: "SurfrCore",
-            dependencies: ["CArgon2"]
+            dependencies: [
+                "CArgon2",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ]
         ),
         .testTarget(
             name: "SurfrCoreTests",

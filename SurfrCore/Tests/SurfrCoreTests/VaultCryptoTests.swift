@@ -164,7 +164,7 @@ final class VaultCryptoTests: XCTestCase {
         let here = URL(fileURLWithPath: #filePath)                       // …/Tests/SurfrCoreTests/VaultCryptoTests.swift
         let root = here.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         let sources = root.appendingPathComponent("Sources/SurfrCore")
-        for name in ["VaultCrypto.swift", "Argon2.swift"] {
+        for name in ["VaultCrypto.swift", "Argon2.swift", "VaultStore.swift", "VaultLock.swift"] {
             let text = try String(contentsOf: sources.appendingPathComponent(name), encoding: .utf8)
             for needle in ["print(", "NSLog(", "os_log(", "debugPrint("] {
                 XCTAssertFalse(text.contains(needle), "\(name) must not contain \(needle)")
@@ -184,9 +184,30 @@ final class VaultCryptoTests: XCTestCase {
         print("⏱  deriveKEK @ defaultMacOS (m=64MiB,t=3,p=1): \(elapsed)")
     }
 
-    // Seam (addition a) — placeholder asserting the boundary: in-memory vault-key lifetime / zeroing on
-    // lock is implemented by VaultLock in Slice 2, not by this stateless crypto layer.
+    // Seam (Slice 1 deferred → Slice 2 fulfilled): the live vault-key residency and zero-on-lock are
+    // owned by VaultLock. Formerly an XCTSkip; now a real passing test.
+    //   (1) VaultKeyResidency.evict() deterministically zeroes the key bytes it owns.
+    //   (2) VaultLock.lock() denies key access and drops to .locked.
+    // Together: "lock eviction actually clears the key." Fuller coverage in VaultLockTests.
     func test_vaultKeyLifetime_isOwnedBy_VaultLock_slice2() throws {
-        throw XCTSkip("Seam: live vault-key residency + zero-on-lock is owned by VaultLock (Slice 2).")
+        // (1) deterministic zeroing of the owned buffer
+        let residency = VaultKeyResidency(VaultCrypto.generateVaultKey())
+        XCTAssertFalse(residency.isZeroedForTest)
+        residency.evict()
+        XCTAssertTrue(residency.isZeroedForTest, "evict() must zero the residency buffer")
+
+        // (2) VaultLock denies the key once locked
+        let v = try makeVault(master: "seam-master")
+        let lock = VaultLock()
+        try lock.unlockWithMaster("seam-master", meta: v.meta)
+        XCTAssertEqual(lock.state, .unlocked)
+        let probe = try lock.withVaultKey { rawBytes($0) }
+        XCTAssertEqual(probe, rawBytes(v.vaultKey))
+
+        lock.lock()
+        XCTAssertEqual(lock.state, .locked)
+        XCTAssertThrowsError(try lock.withVaultKey { _ in }) { error in
+            XCTAssertEqual(error as? VaultLockError, .locked)
+        }
     }
 }
