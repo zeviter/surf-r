@@ -59,6 +59,11 @@ final class Tab: ObservableObject, Identifiable {
     @Published private(set) var webView: WKWebView
     /// Whether `webView` is bound to the shared persistent store (a trusted host).
     private(set) var usesPersistentStore: Bool
+    /// True between a provisional navigation starting and it finishing/failing — i.e.
+    /// while a redirect chain (e.g. an OAuth login) is in flight. The store decision
+    /// is bound at the start of a chain; mid-chain redirects must NOT rebind, so a
+    /// single login flow stays in one store (see the navigation delegate).
+    var navigationChainInFlight = false
 
     @Published var title: String
     @Published var addressText: String
@@ -593,13 +598,36 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
            let url = navigationAction.request.url,
            let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" {
             let wantPersistent = TrustStore.shared.isTrusted(host: url.host)
-            if wantPersistent != tab.usesPersistentStore {
+            // Redirect-chain guard (slice C): a `.other` navigation while a chain is
+            // already in flight is a redirect hop (e.g. an OAuth 302). Do NOT rebind
+            // mid-chain, or the login lands in the wrong store ("cookies not
+            // supported, fixed after reloads"). The store stays as decided at chain
+            // start; a real mismatch is reconciled once the chain settles (didFinish).
+            // A genuine user navigation (link/form/back-forward/reload) is never a
+            // redirect hop, so it still rebinds immediately even while a page loads.
+            let isRedirectHop = tab.navigationChainInFlight && navigationAction.navigationType == .other
+            if wantPersistent != tab.usesPersistentStore && !isRedirectHop {
                 decisionHandler(.cancel)
                 browser.rebind(tab, to: url, persistent: wantPersistent)
                 return
             }
         }
         decisionHandler(.allow)
+    }
+
+    // MARK: - Navigation-chain tracking (for the redirect-chain rebind guard)
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        browser?.tab(for: webView)?.navigationChainInFlight = true
+    }
+
+    func webView(_ webView: WKWebView,
+                 didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        browser?.tab(for: webView)?.navigationChainInFlight = false
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        browser?.tab(for: webView)?.navigationChainInFlight = false
     }
 
     /// WebKit hands us the download once a response is converted: start tracking it.
@@ -617,10 +645,26 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // The redirect chain has settled.
+        let tab = browser?.tab(for: webView)
+        tab?.navigationChainInFlight = false
+
         // Skip blank/new-tab/about:blank and non-web schemes; record real pages only.
         guard let url = webView.url,
               let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = url.host, !host.isEmpty else { return }
+
+        // Deferred rebind (slice C): a chain we let ride in its start store may have
+        // settled on a host whose trust wants the *other* store (e.g. trusted A
+        // redirected to and stayed on untrusted D). Reconcile now — once, after the
+        // chain ends — so the dwelt-on page ends up in the correct store, without
+        // having rebound mid-chain. OAuth flows that return to the trusted origin
+        // match and skip this. Trust is stable per load, so this converges.
+        if let browser, let tab,
+           TrustStore.shared.isTrusted(host: host) != tab.usesPersistentStore {
+            browser.rebind(tab, to: url, persistent: TrustStore.shared.isTrusted(host: host))
+            return
+        }
 
         let title = webView.title
         Task { await HistoryStore.shared.recordVisit(url: url, title: title) }
