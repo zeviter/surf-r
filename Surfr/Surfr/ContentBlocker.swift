@@ -1,5 +1,6 @@
 import WebKit
 import Foundation
+import AppKit
 import ContentBlockerConverter
 
 /// Phase 2b: keeps a set of ad/tracker-blocking content-rule lists applied to
@@ -46,6 +47,11 @@ final class ContentBlocker {
     private let registered = NSHashTable<WKWebView>.weakObjects()
 
     private let cacheMaxAge: TimeInterval = 24 * 60 * 60   // ~24h
+
+    /// How often a long-running app re-checks list staleness in the background.
+    /// Cheap: `refreshIfStale` is a no-op until a list passes `cacheMaxAge` (24h).
+    private static let backgroundRefreshInterval: TimeInterval = 6 * 60 * 60   // 6h
+    private var backgroundRefreshTask: Task<Void, Never>?
 
     /// First-paint gate: true once every list's last-good (cache/seed) has been
     /// applied — fast, no network. `waitUntilReady`/`loadGated` block the very first
@@ -103,6 +109,42 @@ final class ContentBlocker {
             await refresh(s)
         } else {
             log("\(s.name): cache is fresh (< 24h); skipping fetch")
+        }
+    }
+
+    // MARK: - Background refresh
+
+    /// Keep lists current while the app runs: re-check staleness on app-foreground
+    /// and on a periodic timer, reusing the same fetch→convert→last-good path as
+    /// launch. Idempotent; call once after `prepare()`. No UI.
+    func startBackgroundRefresh() {
+        guard backgroundRefreshTask == nil else { return }
+
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.refreshStaleLists(trigger: "foreground") }
+        }
+
+        backgroundRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(Self.backgroundRefreshInterval * 1_000_000_000))
+                if Task.isCancelled { return }
+                await self?.refreshStaleLists(trigger: "interval")
+            }
+        }
+    }
+
+    /// Refresh any stale list now (no-op for fresh ones). Only runs after the
+    /// initial `prepare()`, so it never races the launch path.
+    private func refreshStaleLists(trigger: String) async {
+        guard prepared else { return }
+        #if DEBUG
+        log("background refresh check (\(trigger))")
+        #endif
+        await withTaskGroup(of: Void.self) { group in
+            for source in sources {
+                group.addTask { await self.refreshIfStale(source) }
+            }
         }
     }
 

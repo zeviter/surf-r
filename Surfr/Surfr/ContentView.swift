@@ -1304,6 +1304,7 @@ struct ContentView: View {
         .task {
             // Compile the bundled seed ad-block list and apply it to every tab.
             await ContentBlocker.shared.prepare()
+            ContentBlocker.shared.startBackgroundRefresh()   // periodic + on-foreground staleness re-check
         }
         .task {
             // Load persisted downloads: migrate prior-run in-progress → interrupted,
