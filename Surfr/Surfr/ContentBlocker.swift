@@ -35,6 +35,12 @@ final class ContentBlocker {
                url: URL(string: "https://easylist.to/easylist/easylist.txt")!),
         Source(id: "easyprivacy", name: "EasyPrivacy",
                url: URL(string: "https://easylist.to/easylist/easyprivacy.txt")!),
+        // Stage-1 privacy: cookie-consent / banner blocking. Each source compiles to
+        // its OWN WKContentRuleList (lists are independent and applied together), so
+        // the 150k-rules cap is per-list — EasyList ~63k, EasyPrivacy ~55k, EasyList
+        // Cookie ~15–20k are each well under it; no chunking needed.
+        Source(id: "easylist-cookie", name: "EasyList Cookie",
+               url: URL(string: "https://secure.fanboy.co.nz/fanboy-cookiemonster.txt")!),
     ]
 
     // Per-list state, keyed by Source.id.
