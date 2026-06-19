@@ -9,21 +9,8 @@
 
 ## A. Active plan — current session's queue (rail / shortcuts)
 
-- ◐ **9a — Shortcut registry + missing shortcuts + rail polish.** Central single-source-of-truth
-  shortcut list; add `⌘R` reload, `⌘⇧R` hard reload, `⌘⌥R` empty-cache-and-hard-reload, `⌘Y`
-  history, `⌘⇧Y` trusted sites, `⌘⇧J` downloads, `⌘/` shortcuts page. Rail icons turn **green when
-  their page is active** (history, downloads, trusted, new-tab, shortcuts). Fixed default rail
-  order: **history → downloads → trusted → new tab**. Opening an already-open internal page
-  switches to it (no duplicates).
-- ☐ **9b — Shortcuts page.** Renders the registry via `PageScaffold` (searchable, grouped,
-  consistent with history/trusted).
 - ☐ **9b2 — shortcut editing** (remap with conflict + reserved-key detection, reset-to-default) —
   deferred; the override layer built in 9a supports it.
-- ☐ **9c — Downloads as a page + ephemeral internal surfaces.** Convert downloads to a full
-  searchable page (keep the rail popover with recent downloads + clear-all + a "See all downloads"
-  button that opens the page). Apply the **single-instance ephemeral rule** to all internal pages
-  (history, trusted, downloads, shortcuts, new-tab): reached by shortcut/icon, auto-closed when you
-  navigate away, never left as a stray tab.
 - ☐ **9d — Drag-to-rearrange rail order** (with persistence). Deferred as its own slice — drag
   interaction + saved ordering is fiddlier than it looks.
 
@@ -47,13 +34,6 @@
 
 ## C. Deferred polish & fixes
 
-- ✓ **Persistent download history (was 2c).** GRDB `DownloadStore` at
-  `Application Support/Surfr/downloads.sqlite` mirrors `HistoryStore`/`BookmarkStore`; the popover
-  and downloads page survive relaunch. Active downloads stay live/in-memory and are written on
-  finish/fail/cancel; in-progress rows left by a quit are migrated to `interrupted` on launch.
-  Clear-all deletes finished rows from disk; launch-time prune drops entries older than 90 days
-  (`DownloadStore.retentionInterval`). Missing files are shown but marked unavailable (reveal
-  disabled), not auto-deleted.
 - ☐ **Exact registrable-domain via swift-psl.** `TrustStore.registrableDomain` is a pragmatic
   eTLD+1 subset, not the full Public Suffix List. swift-psl is already a transitive dep; link it
   for exact handling of unusual multi-label TLDs.
@@ -88,3 +68,18 @@
   browsers. Non-Google logins are unaffected once trusted.
 - **Debug-build converter slowness** — SafariConverterLib is slow in Debug (minutes); release
   converts in seconds; the seed protects meanwhile. Cosmetic only.
+
+## Recently completed (short-term context; pruned over time)
+
+- ✓ **9a — Shortcut registry + missing shortcuts + rail polish.** Single-source-of-truth registry
+  with an override layer; added reload (`⌘R`/`⌘⇧R`/`⌘⌥R`) and page shortcuts (`⌘Y`/`⌘⇧Y`/`⌘⇧J`/`⌘/`);
+  rail icons green-when-active; default order history → downloads → trusted → new tab; open-already-
+  open switches instead of duplicating.
+- ✓ **9b — Shortcuts popover + searchable page.** Cheatsheet popover + full page via `PageScaffold`,
+  grouped and searchable, rendering the registry's effective bindings. (Editing is 9b2, still open.)
+- ✓ **9c — Downloads as a page + ephemeral internal surfaces.** Downloads page via `PageScaffold`
+  (popover kept, with "See all"); single-instance ephemeral rule for all internal surfaces — reached
+  by shortcut/icon, auto-closed on switch-away, never left as a stray tab.
+- ✓ **Persistent download history.** GRDB `DownloadStore` (`downloads.sqlite`) mirrors
+  `HistoryStore`/`BookmarkStore`; survives relaunch. In-progress rows left by a quit migrate to
+  `interrupted`; clear-all + 90-day launch prune; missing files shown as unavailable, not deleted.
