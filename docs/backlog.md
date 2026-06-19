@@ -53,6 +53,14 @@
 
 ## Recently completed (short-term context; pruned over time)
 
+- ✓ **Privacy Stage-1 (three wins).** (1) HTTPS-only by default — main-frame http upgraded to
+  https; failure shows an interstitial with explicit per-site "continue insecurely" (no silent
+  fallback); loopback/.local/private IPs exempt. (2) Tracking-param stripping (utm_*/fbclid/gclid/…)
+  scoped to user-initiated GET navigations only — never forms/POSTs/redirects, so auth flows are
+  safe. (3) Cookie-consent blocking via the EasyList Cookie list (third independent WKContentRuleList,
+  ~9.1k rules; EasyList ~63k + EasyPrivacy ~55k + Cookie ~9k, each under the 150k per-list cap — no
+  chunking). All reuse the existing navigation-delegate / content-blocker pipelines.
+
 - ✓ **9b2 — shortcut editing.** Each row on the shortcuts page records a new combo (click the combo →
   capture via a focused NSView that grabs the keystroke before the menu). Writes go to the 9a
   override layer, so the menu/key handlers update live and persist across relaunch. Validates:
