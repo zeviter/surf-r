@@ -10,6 +10,8 @@ acting. Apple framework docs override any code snippet here if APIs have changed
 against current docs (WebKit, AuthenticationServices, CloudKit, Network) before relying on them.
 **`docs/ui-wireframes.md`** is the authoritative UI reference — read it before any rail/tab/omnibox/
 bookmarks/history UI work.
+**`docs/vault-spec.md`** is authoritative for the password vault + AutoFill (F5) — read it before any
+vault/credential/autofill work.
 
 ## Environment
 - macOS Tahoe 26.5.1, Apple Silicon (MacBook Pro M1 Pro, 16 GB RAM).
