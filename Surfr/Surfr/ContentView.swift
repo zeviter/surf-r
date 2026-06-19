@@ -12,6 +12,10 @@ extension Notification.Name {
     static let closeTab = Notification.Name("closeTab")
     /// Posted by the ⌘D menu command to bookmark/unbookmark the active tab's page.
     static let toggleBookmark = Notification.Name("toggleBookmark")
+    /// Posted by the ⌘[ menu command: navigate the active tab back.
+    static let goBack = Notification.Name("goBack")
+    /// Posted by the ⌘] menu command: navigate the active tab forward.
+    static let goForward = Notification.Name("goForward")
 }
 
 private let homeURL = URL(string: "https://duckduckgo.com")!
@@ -83,6 +87,10 @@ final class Tab: ObservableObject, Identifiable {
         webView.isInspectable = true
         #endif
 
+        // Addition 3 (swipe nav): two-finger trackpad / Magic Mouse swipe drives
+        // back/forward. Valid WKWebView property on macOS; set per tab's web view.
+        webView.allowsBackForwardNavigationGestures = true
+
         // Apply the ad-blocking content rules to this tab (now or once compiled).
         ContentBlocker.shared.apply(to: webView)
 
@@ -144,6 +152,9 @@ final class BrowserState: ObservableObject {
     }
     /// Host-grouped tiles for the rail, most-recently-active host first.
     @Published private(set) var hostGroups: [HostGroup] = []
+    /// Addition 5: the macOS window title, mirroring the active tab's page title.
+    /// New-tab page → "New Tab"; navigated but title-less → "Surfr"; else the title.
+    @Published private(set) var windowTitle = "Surfr"
 
     /// Gates `window.open` pop-ups (F4) and handles JS dialogs for every tab.
     let popupGate = PopupGate()
@@ -151,6 +162,8 @@ final class BrowserState: ObservableObject {
     let historyRecorder = HistoryRecorder()
     /// Tracks the active tab's URL so the bookmark menu/title reflects its state.
     private var activeURLBinding: AnyCancellable?
+    /// Addition 5: tracks the active tab's title so the window title updates live.
+    private var activeTitleBinding: AnyCancellable?
     /// Per-tab URL subscriptions, so we can react when a pristine tab navigates.
     private var tabURLBindings: [Tab.ID: AnyCancellable] = [:]
     /// Monotonic activation counter; assigned to each tab as it becomes active
@@ -207,6 +220,18 @@ final class BrowserState: ObservableObject {
         }
     }
 
+    /// Addition 1: close every tab in `host`'s group. Reuses `closeTab` per tab, so
+    /// active-tab reassignment and the keep-window-alive rule (a fresh blank tab when
+    /// the last tab closes) are inherited unchanged. `recomputeHostGroups` then drops
+    /// the host's rail tile. IDs are snapshotted first since `closeTab` mutates `tabs`.
+    func closeHost(_ host: String) {
+        let target = host.lowercased()
+        let ids = tabs
+            .filter { $0.hasNavigated && $0.url.host?.lowercased() == target }
+            .map(\.id)
+        for id in ids { closeTab(id) }
+    }
+
     /// Adopt an allowed pop-up as a new tab with its own isolated ephemeral store.
     /// Called by `PopupGate` from `createWebViewWith`; WebKit then drives its load.
     func adoptPopup(configuration: WKWebViewConfiguration, initialURL: URL?) -> WKWebView {
@@ -227,8 +252,31 @@ final class BrowserState: ObservableObject {
     /// Mirror the active tab's current URL into `BookmarkState` (re-subscribing on
     /// every tab switch), so the bookmark command's title stays correct.
     private func bindActiveURL() {
-        activeURLBinding = activeTab.$url.sink { url in
-            MainActor.assumeIsolated { BookmarkState.shared.activeURL = url }
+        let tab = activeTab
+        activeURLBinding = tab.$url.sink { [weak self] url in
+            MainActor.assumeIsolated {
+                BookmarkState.shared.activeURL = url
+                // Addition 5: a pristine→loaded transition flips `hasNavigated` and
+                // bumps the URL, so recompute the title on URL changes too.
+                self?.refreshWindowTitle()
+            }
+        }
+        // Addition 5: re-track the active tab's title and refresh immediately so the
+        // window title follows both live title changes and tab switches.
+        activeTitleBinding = tab.$title.sink { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshWindowTitle() }
+        }
+        refreshWindowTitle()
+    }
+
+    /// Addition 5: derive the window title from the active tab's state.
+    private func refreshWindowTitle() {
+        let tab = activeTab
+        if !tab.hasNavigated {
+            windowTitle = "New Tab"
+        } else {
+            let trimmed = tab.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            windowTitle = trimmed.isEmpty ? "Surfr" : trimmed
         }
     }
 
@@ -339,6 +387,43 @@ final class HistoryRecorder: NSObject, WKNavigationDelegate {
         .concat(hrefs("link[rel~='icon']"));
     })()
     """
+
+    // MARK: - Downloads (slice A)
+    //
+    // Downloads are wired into THIS same navigation delegate — a web view has only
+    // one navigationDelegate, so the download-decision methods live here alongside
+    // history recording rather than on a second delegate. WebKit converts a response
+    // or navigation action into a `WKDownload`; `DownloadManager` owns the rest.
+
+    /// A response the web view can't render (e.g. a zip/binary) becomes a download;
+    /// everything displayable is allowed through unchanged (the prior default).
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        decisionHandler(navigationResponse.canShowMIMEType ? .allow : .download)
+    }
+
+    /// Honour `download`-attribute links and explicit download navigation actions;
+    /// all other navigations proceed as before.
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
+    }
+
+    /// WebKit hands us the download once a response is converted: start tracking it.
+    func webView(_ webView: WKWebView,
+                 navigationResponse: WKNavigationResponse,
+                 didBecome download: WKDownload) {
+        DownloadManager.shared.register(download)
+    }
+
+    /// Same, for a navigation action converted into a download.
+    func webView(_ webView: WKWebView,
+                 navigationAction: WKNavigationAction,
+                 didBecome download: WKDownload) {
+        DownloadManager.shared.register(download)
+    }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         // Skip blank/new-tab/about:blank and non-web schemes; record real pages only.
@@ -529,6 +614,9 @@ struct FaviconTile: View {
     let isActive: Bool
     let tabCount: Int
     let onTap: () -> Void
+    /// Addition 1: close every tab in this host group (right-click item — also
+    /// reaches single-tab hosts, which never open the flyout).
+    let onCloseHost: () -> Void
 
     @State private var iconData: Data?
 
@@ -566,6 +654,12 @@ struct FaviconTile: View {
         .frame(width: 40, height: 40)
         .contentShape(Rectangle())
         .onTapGesture(perform: onTap)
+        // Addition 1: right-click → close the whole host group. Gives single-tab
+        // hosts (no flyout) the same close-all affordance the flyout header offers.
+        .contextMenu {
+            Button("Close \(tabCount) tab\(tabCount == 1 ? "" : "s")", role: .destructive,
+                   action: onCloseHost)
+        }
         .help(host)
         .task(id: host) { await loadIcon() }
         .onReceive(NotificationCenter.default.publisher(for: .faviconUpdated).receive(on: RunLoop.main)) { note in
@@ -661,7 +755,9 @@ struct RailView: View {
                                 } else {
                                     browser.activeTabID = group.representativeTabID
                                 }
-                            }
+                            },
+                            // Addition 1: right-click close-all for this host group.
+                            onCloseHost: { browser.closeHost(group.host) }
                         )
                         .popover(isPresented: flyoutBinding(for: group.host), arrowEdge: .trailing) {
                             TabFlyout(browser: browser, host: group.host) { flyoutHost = nil }
@@ -718,10 +814,25 @@ struct TabFlyout: View {
     var body: some View {
         let count = hostTabs.count
         VStack(alignment: .leading, spacing: 6) {
-            Text("\(host) · \(count) tab\(count == 1 ? "" : "s")")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            // Addition 1: header shows "host · N tabs" plus a close-all control that
+            // closes every tab in this group, then dismisses the flyout. `closeHost`
+            // empties the group → the host's rail tile (favicon) is removed.
+            HStack(spacing: 6) {
+                Text("\(host) · \(count) tab\(count == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Button {
+                    browser.closeHost(host)
+                    onSelect()   // dismiss the flyout
+                } label: {
+                    Image(systemName: "xmark.circle")
+                        .font(.caption)
+                }
+                .buttonStyle(.plain)
+                .help("Close all \(count) tab\(count == 1 ? "" : "s")")
+            }
             TextField("filter tabs", text: $filter)
                 .textFieldStyle(.roundedBorder)
             Divider()
@@ -807,6 +918,8 @@ struct ContentView: View {
     @State private var spotlightToken = 0
     /// Bumped to focus the new-tab permanent box (Context B) on ⌘L.
     @State private var newTabFocusToken = 0
+    /// Addition 3: retained token for the app-local mouse side-button monitor.
+    @State private var mouseNavMonitor: Any?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -834,6 +947,11 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 800, minHeight: 600)
+        // Addition 5: bind the macOS window title to the active tab's page title.
+        .navigationTitle(browser.windowTitle)
+        // Addition 3: install/remove the app-local mouse side-button monitor.
+        .onAppear { installMouseNavMonitor() }
+        .onDisappear { removeMouseNavMonitor() }
         .onChange(of: browser.activeTabID) { _, _ in showSpotlight = false }
         .task {
             // Compile the bundled seed ad-block list and apply it to every tab.
@@ -884,6 +1002,45 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .closeTab)) { _ in
             browser.closeTab(browser.activeTabID)
+        }
+        // Addition 3: keyboard ⌘[ / ⌘] back/forward on the active tab's web view.
+        .onReceive(NotificationCenter.default.publisher(for: .goBack)) { _ in
+            let webView = browser.activeTab.webView
+            if webView.canGoBack { webView.goBack() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .goForward)) { _ in
+            let webView = browser.activeTab.webView
+            if webView.canGoForward { webView.goForward() }
+        }
+    }
+
+    // MARK: - Addition 3: mouse side-button back/forward
+
+    /// Catch mouse side-button releases at the app level (a local NSEvent monitor),
+    /// so they drive the active tab's history regardless of which view holds focus.
+    /// macOS numbers side buttons 3 (back) and 4 (forward); standard mice map their
+    /// extra buttons there. Only navigates when the web view can; consumes the event
+    /// (returns nil) when it does, otherwise passes it through unchanged.
+    private func installMouseNavMonitor() {
+        guard mouseNavMonitor == nil else { return }
+        mouseNavMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp]) { event in
+            let webView = browser.activeTab.webView
+            switch event.buttonNumber {
+            case 3:
+                if webView.canGoBack { webView.goBack(); return nil }
+            case 4:
+                if webView.canGoForward { webView.goForward(); return nil }
+            default:
+                break
+            }
+            return event
+        }
+    }
+
+    private func removeMouseNavMonitor() {
+        if let monitor = mouseNavMonitor {
+            NSEvent.removeMonitor(monitor)
+            mouseNavMonitor = nil
         }
     }
 

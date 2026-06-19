@@ -38,6 +38,18 @@ struct SurfrApp: App {
                 }
                 .keyboardShortcut("d", modifiers: .command)
 
+                // Addition 3: keyboard back/forward (was missing). Pairs with the
+                // swipe-gesture and mouse side-button paths wired in ContentView.
+                Button("Back") {
+                    NotificationCenter.default.post(name: .goBack, object: nil)
+                }
+                .keyboardShortcut("[", modifiers: .command)
+
+                Button("Forward") {
+                    NotificationCenter.default.post(name: .goForward, object: nil)
+                }
+                .keyboardShortcut("]", modifiers: .command)
+
                 #if DEBUG
                 Button("Run History Self-Test") {
                     Task { await HistoryStore.shared.runSelfTest() }
