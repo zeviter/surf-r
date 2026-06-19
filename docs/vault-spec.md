@@ -184,7 +184,7 @@ migration.
 ### Tables (sketch)
 | Table | Columns |
 |----|----|
-| `vault_meta` | `kdf_salt`, `kdf_params`, `wrapped_vault_key_master`, `wrapped_vault_key_recovery`, `schema_version`. (The biometric copy lives in the Keychain, not here.) |
+| `vault_meta` | **per-door** salt + params: `kdf_salt_master`, `kdf_params_master`, `wrapped_vault_key_master`, `kdf_salt_recovery`, `kdf_params_recovery`, `wrapped_vault_key_recovery`, `schema_version`. (The biometric copy lives in the Keychain, not here.) |
 | `items` | `id`, `type` (`login` · `passkey`* · reserved), `title`, `created_at`, `modified_at`, `wrapped_item_key`, `ciphertext` (encrypted payload), `health_flags`. |
 | `item_hosts` | `item_id`, `host` (subdomain-aware, matching the favicon grouping unit), `is_primary` — drives URL matching for fill. |
 | `audit_cache` | derived weak / reused signals, recomputed locally; never holds plaintext. |
@@ -198,6 +198,18 @@ path — **no schema migration** needed when passkeys land.
 > combined blob directly in `ciphertext`, so a standalone `nonce` column is redundant and has been
 > dropped. Same applies to `wrapped_item_key` and the `vault_meta` wrapped-key columns — each is a
 > combined GCM blob carrying its own nonce.
+>
+> **Slice 2 amendment — per-door salt + params in `vault_meta`.** The two password-based doors (master,
+> recovery) each derive a KEK from an **independent** Argon2id salt and its own params, so `vault_meta`
+> carries `kdf_salt_master`/`kdf_params_master` **and** `kdf_salt_recovery`/`kdf_params_recovery` (params
+> persisted as JSON text). The original single-`kdf_salt` sketch was wrong; the as-built per-door columns
+> above are correct. `schema_version` here is the **envelope/payload** version (distinct from the GRDB
+> table-migration id); `VaultStore` rejects an unknown/newer value rather than misread a future format.
+>
+> **Slice 2 — cleartext metadata.** `items.title` and `item_hosts.host` are stored **in the clear** so the
+> list renders and URL matching works while the vault is *locked*. Credentials (username/password/notes/
+> TOTP) live only inside the encrypted `ciphertext` and never touch a cleartext column. The privacy cost
+> of the cleartext metadata is disclosed in §13.
 
 **Login payload (decrypted shape — cleartext only in memory, only while unlocked):**
 ```json
@@ -363,6 +375,7 @@ getting the key hierarchy right unblocks everything else.
 | Casual snooping (auto-lock; biometric reveal/copy gating). | A coerced master password or a stolen Recovery Kit — the kit is a real second door. |
 | Cloud-leak exposure (nothing uploaded; no server to breach). | Two-factor independence when TOTP shares the vault — disclosed and optional. |
 | Vendor lock-in / telemetry (self-owned; collects nothing). | Total loss if **both** master password and Recovery Kit are lost — unrecoverable by design. |
+| Exposure of credential *contents* at rest (usernames/passwords/notes/TOTP are AES-256-GCM encrypted; only ciphertext is on disk). | **Metadata leak from the raw DB file.** Item titles and associated hosts are stored as cleartext metadata (§6), so an attacker with the database file but **not** the vault key can still learn *which sites you have entries for* — just not the credentials themselves. |
 
 State these honestly in any user-facing copy, consistent with `spec.md` §9.
 
