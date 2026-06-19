@@ -1274,11 +1274,14 @@ private struct BrowserCommandHandlers: ViewModifier {
     private func emptyCacheAndReload() {
         let webView = browser.activeTab.webView
         let store = webView.configuration.websiteDataStore
+        // Disk + memory + fetch caches are the live HTTP caches. (The old
+        // WKWebsiteDataTypeOfflineWebApplicationCache was removed in macOS 26.2 —
+        // AppCache is no longer a supported web feature, so there's nothing to clear
+        // and no replacement type; dropping it keeps clear-data behaviour identical.)
         let cacheTypes: Set<String> = [
             WKWebsiteDataTypeDiskCache,
             WKWebsiteDataTypeMemoryCache,
             WKWebsiteDataTypeFetchCache,
-            WKWebsiteDataTypeOfflineWebApplicationCache,
         ]
         Task { @MainActor in
             await store.removeData(ofTypes: cacheTypes, modifiedSince: .distantPast)

@@ -178,8 +178,10 @@ final class DownloadStore {
 }
 
 /// Raw `state` strings shared with `DownloadState` — kept here so the pure data
-/// layer doesn't import the UI-side enum but stays in sync with it.
+/// layer doesn't import the UI-side enum but stays in sync with it. `nonisolated`
+/// because they're immutable, `Sendable` constants used inside GRDB's off-main
+/// `@Sendable` write closures (the module's default isolation is MainActor).
 enum DownloadStateRaw {
-    static let inProgress = "inProgress"
-    static let interrupted = "interrupted"
+    nonisolated static let inProgress = "inProgress"
+    nonisolated static let interrupted = "interrupted"
 }
