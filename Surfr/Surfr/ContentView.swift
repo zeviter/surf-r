@@ -1571,6 +1571,12 @@ struct ContentView: View {
             #endif
         }
         .task { await vault.load() }
+        // §4 background auto-lock. Conservative trigger: lock when the app is HIDDEN (⌘H / Hide) — a
+        // deliberate step-away — not on every focus loss, so glancing at another app/window doesn't
+        // drop the session. (Full resign-active + 5-min idle-timer options are a documented follow-on.)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
+            vault.lockNow()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .openVault)) { _ in
             // Route by vault phase: unlocked → open the surface; new → first-run; locked → unlock.
             switch vault.phase {

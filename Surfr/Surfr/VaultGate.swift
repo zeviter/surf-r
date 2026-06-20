@@ -256,16 +256,27 @@ final class VaultGate: ObservableObject {
             vaultLog("biometric unlock cancelled → master fallback")
             return false                       // fall to master, no penalty, stay enabled
         } catch BiometricFailure.invalidated {
-            biometric.disable()
-            biometricEnabled = false
-            needsBiometricReenroll = true      // offer "Re-enable Touch ID" after master unlock
-            lastError = "Touch ID was reset. Unlock with your master password."
-            vaultLog("biometric invalidated (enrolment changed) → disabled, master required, re-enroll offered")
+            handleBiometricInvalidation()      // disable + message + button removal, on the FIRST failure
             return false
         } catch {
-            vaultLog("biometric unlock failed → master fallback")
-            return false                       // any other failure → master fallback
+            // Transient (e.g. lockout): keep biometric enabled, but never fail silently.
+            lastError = "Touch ID didn’t work — use your master password."
+            vaultLog("biometric unlock failed (transient) → master fallback")
+            return false
         }
+    }
+
+    /// The `.biometryCurrentSet` invalidation path: the stored SE key is dead. Disable immediately so
+    /// the Touch ID button disappears this instant (`shouldOfferBiometric` flips false), refresh
+    /// availability (re-enable is only offered if biometry is still enrolled), and surface the reset
+    /// message — all on the first failure, no retry lag.
+    private func handleBiometricInvalidation() {
+        biometric.disable()
+        biometricEnabled = false
+        needsBiometricReenroll = true
+        biometricAvailable = biometric.isAvailable
+        lastError = "Touch ID was reset. Unlock with your master password."
+        vaultLog("biometric invalidated (enrolment changed) → disabled, master required, re-enroll offered")
     }
 
     private func recordMasterAuth() {

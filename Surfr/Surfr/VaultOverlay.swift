@@ -99,6 +99,7 @@ private struct RecoveryKitStepView: View {
     @State private var savedOrPrinted = false
     @State private var acknowledged = false
     @State private var enableBiometric = true
+    @State private var saveError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -121,16 +122,23 @@ private struct RecoveryKitStepView: View {
             HStack {
                 Button {
                     let data = RecoveryKit.makePDF(code: gate.recoveryCodeForDisplay, createdAt: Date())
-                    RecoveryKit.presentSavePanel(data: data)
-                    savedOrPrinted = true
+                    switch RecoveryKit.presentSavePanel(data: data) {
+                    case .saved:        savedOrPrinted = true; saveError = nil
+                    case .cancelled:    break                         // no-op; the button stays for retry
+                    case .failed(let m): saveError = "Couldn’t save the kit (\(m)). Try a different location."
+                    }
                 } label: { Label("Save PDF…", systemImage: "square.and.arrow.down") }
                 Button {
                     RecoveryKit.print(code: gate.recoveryCodeForDisplay, createdAt: Date())
-                    savedOrPrinted = true
+                    savedOrPrinted = true; saveError = nil
                 } label: { Label("Print…", systemImage: "printer") }
             }
+            if let saveError {
+                Text(saveError).font(.caption).foregroundStyle(.red)
+            }
 
-            Toggle("I've saved my Recovery Kit somewhere safe", isOn: $acknowledged)
+            Toggle("I’ve saved my Recovery Kit somewhere safe", isOn: $acknowledged)
+                .toggleStyle(.checkbox)                               // visible outlined checkbox at rest
                 .disabled(!savedOrPrinted)
                 .font(.callout)
             if !savedOrPrinted {
@@ -139,6 +147,7 @@ private struct RecoveryKitStepView: View {
 
             if gate.biometricAvailable {
                 Toggle("Enable Touch ID for faster unlock", isOn: $enableBiometric)
+                    .toggleStyle(.checkbox)
                     .font(.callout)
             }
 
@@ -292,30 +301,83 @@ struct VaultSurfacePlaceholder: View {
     @EnvironmentObject private var gate: VaultGate
 
     var body: some View {
+        Group {
+            // The surface reflects the live session state, so "Lock vault" gives immediate feedback.
+            // NOTE (§4): leaving this surface does NOT lock — the unlocked session persists until an
+            // explicit lock, app background/resign-active, or the master-reauth interval.
+            if gate.phase == .locked {
+                lockedView
+            } else {
+                unlockedView
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    private var unlockedView: some View {
         VStack(spacing: 14) {
-            Image(systemName: "key.fill").font(.system(size: 40)).foregroundStyle(.secondary)
+            Image(systemName: "key.fill").font(.system(size: 40)).foregroundStyle(.green)
             Text("Vault unlocked").font(.title2).bold()
             Text("Your saved logins will appear here. The list, detail, and add/edit views arrive in the next slice.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 420)
 
-            // Biometric: re-enable after an enrolment-change invalidation, or enable if not yet on.
             if gate.biometricAvailable {
-                if gate.needsBiometricReenroll {
-                    Button { gate.enableBiometric() } label: { Label("Re-enable Touch ID", systemImage: "touchid") }
-                        .help("Touch ID was reset when your enrolment changed. Re-enable it for this device.")
-                } else if !gate.biometricEnabled {
-                    Button { gate.enableBiometric() } label: { Label("Enable Touch ID", systemImage: "touchid") }
-                } else {
-                    Button(role: .destructive) { gate.disableBiometric() } label: { Label("Disable Touch ID", systemImage: "touchid") }
-                }
+                TouchIDStatusRow(gate: gate).frame(maxWidth: 320)
             }
 
-            Button { gate.lockNow() } label: { Label("Lock vault", systemImage: "lock") }
+            Button { gate.lockNow() } label: { Label("Lock vault", systemImage: "lock.fill") }
+                .buttonStyle(.borderedProminent)
                 .padding(.top, 6)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    private var lockedView: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "lock.fill").font(.system(size: 40)).foregroundStyle(.secondary)
+            Text("Vault locked").font(.title2).bold()
+            Text("Your vault is locked. Unlock to view your logins.")
+                .font(.callout).foregroundStyle(.secondary)
+            Button { NotificationCenter.default.post(name: .openVault, object: nil) } label: {
+                Label("Unlock", systemImage: "lock.open.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.top, 6)
+        }
+    }
+}
+
+/// Touch ID status + control on the unlocked surface, using surf-r's green/amber badge vocabulary.
+/// Reads as a toggle when usable; shows an amber "was reset" state with a re-enable action after an
+/// enrolment-change invalidation.
+private struct TouchIDStatusRow: View {
+    @ObservedObject var gate: VaultGate
+
+    var body: some View {
+        if gate.needsBiometricReenroll {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                Text("Touch ID was reset").foregroundStyle(.orange)
+                Spacer()
+                Button("Re-enable") { gate.enableBiometric() }
+            }
+            .help("Touch ID was reset when your enrolment changed. Re-enable it for this device.")
+        } else {
+            Toggle(isOn: Binding(
+                get: { gate.biometricEnabled },
+                set: { $0 ? gate.enableBiometric() : gate.disableBiometric() }
+            )) {
+                HStack(spacing: 6) {
+                    Image(systemName: gate.biometricEnabled ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(gate.biometricEnabled ? .green : .secondary)
+                    Text("Touch ID")
+                    Text(gate.biometricEnabled ? "On" : "Off")
+                        .font(.caption).foregroundStyle(gate.biometricEnabled ? .green : .secondary)
+                }
+            }
+            .toggleStyle(.switch)
+        }
     }
 }
 

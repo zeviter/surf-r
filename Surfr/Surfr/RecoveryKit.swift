@@ -93,15 +93,24 @@ enum RecoveryKit {
         return host.dataWithPDF(inside: host.bounds)
     }
 
+    /// Outcome of a save attempt, so the (mandatory) kit step only advances on a real save and can
+    /// show a retryable error otherwise — first-run must never dead-end.
+    enum SaveResult: Equatable { case saved, cancelled, failed(String) }
+
     /// Save the in-memory PDF to a user-chosen location. Writes ONLY to the path the user picks.
     @MainActor
-    static func presentSavePanel(data: Data) {
+    static func presentSavePanel(data: Data) -> SaveResult {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "surf-r Recovery Kit.pdf"
         panel.allowedContentTypes = [.pdf]
         panel.canCreateDirectories = true
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? data.write(to: url)
+        guard panel.runModal() == .OK, let url = panel.url else { return .cancelled }
+        do {
+            try data.write(to: url, options: .atomic)
+            return .saved
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
 
     /// Print the kit. Rendering stays in our view; the OS print system owns any spooling.

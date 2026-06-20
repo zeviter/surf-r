@@ -65,29 +65,28 @@ final class SecureEnclaveBiometricUnlock: BiometricUnlocking, @unchecked Sendabl
             do {
                 return try wrapper.unwrap(blob)                 // blocks on the Touch ID prompt
             } catch {
-                throw Self.classify(error, biometryAvailableNow: { LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) })
+                throw Self.classify(error)
             }
         }.value
     }
 
-    /// Map an SE/LA error to a gate outcome. Cancellation must never disable biometric; an auth failure
-    /// while biometry is still enrolled is treated as a `.biometryCurrentSet` invalidation (offer
-    /// re-enable); lockout falls back to master without disabling.
-    static func classify(_ error: Error, biometryAvailableNow: () -> Bool) -> BiometricFailure {
+    /// Map an SE/LA error to a gate outcome. Only a user **cancel** leaves biometric untouched, and a
+    /// **lockout** is a transient "try again later"; **every other** failure of a stored biometric key
+    /// means the key is no longer usable (the `.biometryCurrentSet` enrolment change invalidated it),
+    /// so it's reported as `.invalidated` on the **first** failure — the gate then disables it and
+    /// shows the reset message immediately, rather than lagging a retry behind.
+    static func classify(_ error: Error) -> BiometricFailure {
         if let laError = error as? LAError {
             switch laError.code {
-            case .userCancel, .appCancel, .systemCancel:        return .userCancelled
-            case .biometryNotAvailable, .biometryNotEnrolled:   return .unavailable
-            case .biometryLockout:                              return .failed
-            default:                                            return .failed
+            case .userCancel, .appCancel, .systemCancel: return .userCancelled
+            case .biometryLockout:                       return .failed        // transient; don't disable
+            default:                                     return .invalidated   // not-available/not-enrolled/auth-fail with a stored key
             }
         }
         let ns = error as NSError
-        if ns.code == errSecUserCanceled || ns.code == Int(errSecUserCanceled) { return .userCancelled }
-        if case SecureEnclaveWrapper.Failure.keyNotFound = error { return .invalidated }
-        // A decrypt that failed for a non-cancel reason while biometry is still enrolled most likely
-        // means the stored key was invalidated by an enrolment change.
-        return biometryAvailableNow() ? .invalidated : .unavailable
+        if ns.code == errSecUserCanceled { return .userCancelled }
+        // Any non-cancel Secure-Enclave / key failure on a key we hold → the stored key is unusable.
+        return .invalidated
     }
 
     // MARK: - Keychain blob storage (data-protection keychain, our access group, ThisDeviceOnly)
