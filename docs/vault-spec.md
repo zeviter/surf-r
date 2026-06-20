@@ -365,6 +365,10 @@ getting the key hierarchy right unblocks everything else.
 - Testing biometric + Secure Enclave flows **on real hardware** (the Simulator has no SE).
 - Anything requiring payment or acceptance of Apple's terms.
 
+> **Slice 4 as-built notes (entitlements).**
+> - **Keychain access group:** `com.zeviter.surfr.vault` (entitlement form `$(AppIdentifierPrefix)com.zeviter.surfr.vault`), added via Xcode ▸ Signing & Capabilities ▸ Keychain Sharing. The code resolves the full team-prefixed group at runtime, so no Team ID is committed. The biometric door's SE key + ECIES blob live in this group (data-protection keychain, `WhenUnlockedThisDeviceOnly`) so the **AutoFill extension (Slice 10)** can share them — the extension target must declare the **same** group.
+> - **App Sandbox file access:** enabling Keychain Sharing turns on **App Sandbox**, which defaults *User Selected File* access to **read-only**. The Recovery Kit's `NSSavePanel` needs **read/write** (a read-only sandbox crashes the save panel with `EXC_BREAKPOINT`). Set **App Sandbox ▸ File Access ▸ User Selected File = Read/Write** (`ENABLE_USER_SELECTED_FILES = readwrite`). The **iOS target** uses the document picker instead, and the **AutoFill extension (Slice 10)** has its own sandbox/entitlement set — both must be configured when they're added.
+
 ---
 
 ## 13. Threat model &amp; honest limitations
