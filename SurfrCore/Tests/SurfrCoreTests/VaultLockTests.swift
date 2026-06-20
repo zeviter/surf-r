@@ -98,6 +98,27 @@ final class VaultLockTests: XCTestCase {
         XCTAssertEqual(lock.state, .locked)
     }
 
+    // Door 3 entry: adopt an externally-obtained key (the biometric path) → resident + usable.
+    func test_adopt_takesResidencyOfExternalKey() throws {
+        let v = try makeVault()
+        let lock = VaultLock()
+        XCTAssertEqual(lock.state, .locked)
+
+        lock.adopt(v.vaultKey)
+        XCTAssertEqual(lock.state, .unlocked)
+        let got = try lock.withVaultKey { rawBytes($0) }
+        XCTAssertEqual(got, rawBytes(v.vaultKey))
+
+        // It decrypts items just like the password doors.
+        let payload = Data("biometric-adopted".utf8)
+        let item = try VaultCrypto.encryptNewItem(payload, vaultKey: v.vaultKey)
+        XCTAssertEqual(try lock.withVaultKey { try VaultCrypto.decryptItem(item, vaultKey: $0) }, payload)
+
+        lock.lock()
+        XCTAssertEqual(lock.state, .locked)
+        XCTAssertThrowsError(try lock.withVaultKey { _ in })
+    }
+
     // Recovery-code unlock path through VaultLock.
     func test_unlockWithRecovery() throws {
         let created = try VaultCrypto.createVault(masterPassword: "m", recoveryCode: "the-recovery-code", params: Self.fastParams)

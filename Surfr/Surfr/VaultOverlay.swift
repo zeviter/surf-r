@@ -98,6 +98,7 @@ private struct RecoveryKitStepView: View {
 
     @State private var savedOrPrinted = false
     @State private var acknowledged = false
+    @State private var enableBiometric = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -136,6 +137,11 @@ private struct RecoveryKitStepView: View {
                 Text("Save or print the kit to continue.").font(.caption).foregroundStyle(.tertiary)
             }
 
+            if gate.biometricAvailable {
+                Toggle("Enable Touch ID for faster unlock", isOn: $enableBiometric)
+                    .font(.callout)
+            }
+
             if let error = gate.lastError {
                 Text(error).font(.caption).foregroundStyle(.red)
             }
@@ -144,7 +150,7 @@ private struct RecoveryKitStepView: View {
                 Button("Cancel", action: onCancel)
                 Spacer()
                 if gate.isWorking { ProgressView().controlSize(.small).padding(.trailing, 6) }
-                Button("Finish") { Task { await gate.acknowledgeKit() } }
+                Button("Finish") { Task { await gate.acknowledgeKit(enableBiometric: enableBiometric) } }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!acknowledged || gate.isWorking)
             }
@@ -162,6 +168,7 @@ private struct UnlockView: View {
 
     @State private var password = ""
     @State private var showRecovery = false
+    @State private var biometricTried = false
 
     var body: some View {
         if showRecovery {
@@ -173,6 +180,13 @@ private struct UnlockView: View {
                 SecureField("Master password", text: $password)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { attempt() }
+
+                if gate.shouldOfferBiometric {
+                    Button { tryBiometric() } label: {
+                        Label("Unlock with Touch ID", systemImage: "touchid")
+                    }
+                    .buttonStyle(.bordered)
+                }
 
                 if let error = gate.lastError {
                     Text(error).font(.caption).foregroundStyle(.red)
@@ -190,7 +204,18 @@ private struct UnlockView: View {
                 .padding(.top, 4)
             }
             .padding(22)
+            // Biometric fires automatically on present (WF-3 / §4), once; master is always the fallback.
+            .task {
+                guard !biometricTried else { return }
+                biometricTried = true
+                tryBiometric()
+            }
         }
+    }
+
+    private func tryBiometric() {
+        guard gate.shouldOfferBiometric else { return }
+        Task { if await gate.unlockWithBiometric() { onClose() } }
     }
 
     private func attempt() {
@@ -273,6 +298,19 @@ struct VaultSurfacePlaceholder: View {
             Text("Your saved logins will appear here. The list, detail, and add/edit views arrive in the next slice.")
                 .font(.callout).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 420)
+
+            // Biometric: re-enable after an enrolment-change invalidation, or enable if not yet on.
+            if gate.biometricAvailable {
+                if gate.needsBiometricReenroll {
+                    Button { gate.enableBiometric() } label: { Label("Re-enable Touch ID", systemImage: "touchid") }
+                        .help("Touch ID was reset when your enrolment changed. Re-enable it for this device.")
+                } else if !gate.biometricEnabled {
+                    Button { gate.enableBiometric() } label: { Label("Enable Touch ID", systemImage: "touchid") }
+                } else {
+                    Button(role: .destructive) { gate.disableBiometric() } label: { Label("Disable Touch ID", systemImage: "touchid") }
+                }
+            }
+
             Button { gate.lockNow() } label: { Label("Lock vault", systemImage: "lock") }
                 .padding(.top, 6)
         }

@@ -55,6 +55,14 @@ public final class VaultLock: @unchecked Sendable {
         takeResidency(of: key)
     }
 
+    /// Take residency of a vault key obtained **outside** the password doors — i.e. the biometric
+    /// door (door 3), where a Secure-Enclave-backed wrapper has already decrypted the vault key.
+    /// `VaultLock` is the single residency owner for all three doors; this is how the non-password
+    /// doors hand the live key in. Import-clean: takes a CryptoKit `SymmetricKey`, nothing else.
+    public func adopt(_ vaultKey: SymmetricKey) {
+        takeResidency(of: vaultKey)
+    }
+
     private func takeResidency(of key: SymmetricKey) {
         mutex.lock(); defer { mutex.unlock() }
         residency?.evict()
