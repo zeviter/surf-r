@@ -1589,6 +1589,7 @@ struct ContentView: View {
             vault.lockNow()
         }
         .onReceive(NotificationCenter.default.publisher(for: .openVault)) { _ in
+            showSpotlight = false   // don't leave the omnibox overlay lingering under the vault overlay
             // Route by vault phase: unlocked → open the surface; new → first-run; locked → unlock.
             switch vault.phase {
             case .unlocked:

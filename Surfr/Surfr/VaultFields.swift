@@ -15,9 +15,10 @@ struct OutlinedCheckboxToggleStyle: ToggleStyle {
                         .fill(configuration.isOn ? Color.accentColor : Color.clear)
                     RoundedRectangle(cornerRadius: 4)
                         .strokeBorder(configuration.isOn ? Color.accentColor : Color.secondary, lineWidth: 1.5)
-                    if configuration.isOn {
-                        Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
-                    }
+                    // Always present; only the opacity changes — so toggling causes zero relayout.
+                    Image(systemName: "checkmark").font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .opacity(configuration.isOn ? 1 : 0)
                 }
                 .frame(width: 16, height: 16)
                 configuration.label

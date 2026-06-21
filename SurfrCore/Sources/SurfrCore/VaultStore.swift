@@ -58,10 +58,10 @@ public enum VaultStoreError: Error, Equatable {
 /// (Foundation + GRDB only — no AppKit/SwiftUI/WebKit, no CryptoKit: this layer never touches keys or
 /// plaintext, only ciphertext blobs and cleartext metadata). All DB work runs on GRDB's serialized
 /// queue. **No logging in this file** — see the no-logging guard test.
-public final class VaultStore {
+public final class VaultStore: Sendable {
 
-    private let dbQueue: DatabaseQueue
-    private let dbURL: URL
+    private let dbQueue: DatabaseQueue   // GRDB's DatabaseQueue is Sendable + internally serialized
+    private let dbURL: URL               // immutable
 
     /// Opens (creating if needed) the vault database at `path` and runs migrations.
     ///

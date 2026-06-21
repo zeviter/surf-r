@@ -322,7 +322,7 @@ final class VaultGate: ObservableObject {
             let reloaded = try? await store.loadMeta()
             let saltChanged = reloaded?.kdfSaltRecovery != meta.kdfSaltRecovery
             let blobChanged = reloaded?.wrappedVaultKeyRecovery != meta.wrappedVaultKeyRecovery
-            vaultLog("recovery kit regenerated — recovery salt changed=\(saltChanged ?? false), wrapped copy changed=\(blobChanged ?? false); old code now invalid")
+            vaultLog("recovery kit regenerated — recovery salt changed=\(saltChanged), wrapped copy changed=\(blobChanged); old code now invalid")
             return newCode
         } catch {
             lastError = "Could not regenerate the Recovery Kit."

@@ -70,8 +70,8 @@ final class SecureEnclaveBiometricUnlock: BiometricUnlocking, @unchecked Sendabl
         let context = LAContext()
         context.localizedCancelTitle = "Use master password"   // our own fallback owns the cancel path
         wrapper.authenticationContext = context
-        contextLock.lock(); activeContext = context; contextLock.unlock()
-        defer { contextLock.lock(); activeContext = nil; contextLock.unlock() }
+        contextLock.withLock { activeContext = context }       // scoped lock — async-safe (Swift 6)
+        defer { contextLock.withLock { activeContext = nil } }
 
         // Single implicit prompt: SecKeyCreateDecryptedData drives the Touch ID prompt AND the ECIES
         // decrypt in one step. (The two-step evaluateAccessControl→reuse approach didn't drive the SE
@@ -91,10 +91,11 @@ final class SecureEnclaveBiometricUnlock: BiometricUnlocking, @unchecked Sendabl
     /// burst of calls (one per keystroke) only invalidates **once** — no `Code=-10 "Invalid context"`
     /// loop on an already-invalidated context.
     func cancel() {
-        contextLock.lock()
-        let ctx = activeContext
-        activeContext = nil
-        contextLock.unlock()
+        let ctx: LAContext? = contextLock.withLock {
+            let c = activeContext
+            activeContext = nil
+            return c
+        }
         ctx?.invalidate()
     }
 
