@@ -1,7 +1,15 @@
 import Foundation
 import Combine
+import CryptoKit
 import LocalAuthentication
 import SurfrCore
+
+/// Result of a CSV import (Slice 5b).
+struct ImportSummary: Equatable {
+    var imported: Int
+    var skippedDuplicates: Int
+    var failed: Bool
+}
 
 /// App-level coordinator for the password vault UI. Owns the single `VaultStore` + `VaultLock`,
 /// resolves the on-screen `Phase`, and drives the mandatory first-run flow via `FirstRunReducer`.
@@ -313,6 +321,54 @@ final class VaultGate: ObservableObject {
         guard let store else { return }
         try? await store.deleteItem(id: id)
         await loadItems()
+    }
+
+    /// Bulk CSV import (Slice 5b): skip EXACT duplicates (every field incl. password — a same
+    /// title/host/username but different password is a distinct credential and IS imported), encrypt
+    /// the survivors under fresh per-item keys, and store them in **one atomic transaction** (a
+    /// failure changes nothing). Requires the vault unlocked.
+    func importLogins(_ candidates: [ImportCandidate]) async -> ImportSummary {
+        guard let store, phase == .unlocked else { return ImportSummary(imported: 0, skippedDuplicates: 0, failed: true) }
+        isWorking = true; defer { isWorking = false }
+
+        // Fingerprints of existing items (decrypt each once) — and within-file dupes via the same set.
+        var seen = Set<String>()
+        for it in items {
+            if let p = decryptPayload(it) { seen.insert(Self.fingerprint(title: it.title, hosts: it.hosts, payload: p)) }
+        }
+
+        var skippedDuplicates = 0
+        let now = Date()
+        do {
+            let toStore: [StoredItem] = try lock.withVaultKey { key in
+                var out: [StoredItem] = []
+                for c in candidates {
+                    let fp = Self.fingerprint(title: c.title, hosts: c.hosts, payload: c.payload)
+                    guard seen.insert(fp).inserted else { skippedDuplicates += 1; continue }
+                    var data = try c.payload.encoded()
+                    let sealed = try VaultCrypto.encryptNewItem(data, vaultKey: key)
+                    data.resetBytes(in: 0..<data.count)   // wipe the transient plaintext JSON
+                    out.append(StoredItem(title: c.title, createdAt: now, modifiedAt: now, sealed: sealed, hosts: c.hosts))
+                }
+                return out
+            }
+            try await store.upsertMany(toStore)   // atomic — all or nothing
+            await loadItems()
+            vaultLog("import: \(toStore.count) added, \(skippedDuplicates) exact-duplicate(s) skipped")
+            return ImportSummary(imported: toStore.count, skippedDuplicates: skippedDuplicates, failed: false)
+        } catch {
+            lastError = "Import failed — nothing was changed."
+            return ImportSummary(imported: 0, skippedDuplicates: 0, failed: true)
+        }
+    }
+
+    /// Exact-match fingerprint across ALL fields (so different-password rows are distinct). Hashed so
+    /// no plaintext lingers in the dedupe set.
+    private static func fingerprint(title: String, hosts: [SurfrCore.Host], payload: LoginPayload) -> String {
+        let host = hosts.first?.host ?? ""
+        let joined = [title, host, payload.username, payload.password, payload.notes,
+                      payload.totp ?? "", payload.urls.joined(separator: " ")].joined(separator: "\u{1F}")
+        return SHA256.hash(data: Data(joined.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Setting (WF-5, 6b): require authentication before revealing/copying a password — independent of

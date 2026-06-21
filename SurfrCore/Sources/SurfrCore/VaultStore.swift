@@ -159,6 +159,22 @@ public final class VaultStore: Sendable {
         }
     }
 
+    /// Bulk insert/update in a **single transaction** — all-or-nothing. Used by CSV import: a failure
+    /// part-way rolls the whole batch back, never leaving a partial import. (Per-item AES-GCM is
+    /// microseconds, so one transaction is essentially free.)
+    public func upsertMany(_ items: [StoredItem]) async throws {
+        guard !items.isEmpty else { return }
+        try await dbQueue.write { db in
+            for item in items {
+                try ItemRow(item).save(db)
+                try HostRow.filter(Column("item_id") == item.id.uuidString).deleteAll(db)
+                for host in item.hosts {
+                    try HostRow(itemId: item.id.uuidString, host: host.host, isPrimary: host.isPrimary).insert(db)
+                }
+            }
+        }
+    }
+
     /// Delete an item; its `item_hosts` / `audit_cache` rows cascade.
     public func deleteItem(id: UUID) async throws {
         _ = try await dbQueue.write { db in try ItemRow.deleteOne(db, key: id.uuidString) }

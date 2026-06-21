@@ -101,7 +101,19 @@ final class FaviconService: @unchecked Sendable {
         return result
     }
 
+    /// Cap concurrent network resolves so a bulk import / fast scroll can't fan out hundreds of
+    /// simultaneous favicon fetches. Per-host coalescing (above) handles duplicates; this bounds the
+    /// distinct-host fan-out.
+    private let fetchLimiter = AsyncSemaphore(value: 6)
+
     private func performResolve(host: String, key: String, declared: [URL]) async -> Data? {
+        await fetchLimiter.wait()
+        let result = await doResolve(host: host, key: key, declared: declared)
+        await fetchLimiter.signal()
+        return result
+    }
+
+    private func doResolve(host: String, key: String, declared: [URL]) async -> Data? {
         // 1. Declared icons, same-host only, in preference order.
         for url in declared where url.host?.lowercased() == host.lowercased() {
             if let data = await fetchUsableRaster(from: url) {
@@ -273,6 +285,24 @@ final class FaviconService: @unchecked Sendable {
 
 /// Blocks cross-host redirects when fetching an icon, so a site can't bounce the
 /// favicon request to a third party (privacy). Same-host redirects are followed.
+/// Minimal async counting semaphore — bounds concurrent favicon network resolves.
+actor AsyncSemaphore {
+    private var available: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(value: Int) { available = value }
+
+    func wait() async {
+        if available > 0 { available -= 1; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func signal() {
+        if waiters.isEmpty { available += 1 }
+        else { waiters.removeFirst().resume() }
+    }
+}
+
 private final class SameHostRedirectBlocker: NSObject, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession,
                     task: URLSessionTask,

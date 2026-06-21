@@ -176,6 +176,31 @@ final class VaultStoreTests: XCTestCase {
         XCTAssertTrue(dump.contains("\"algorithm\":\"argon2id\""), "kdf params should be JSON with argon2id")
     }
 
+    // Bulk import path (upsertMany): round-trip + no plaintext on disk (incl. WAL).
+    func test_upsertMany_roundTripAndNoPlaintext() async throws {
+        let (meta, vaultKey) = try VaultCrypto.createVault(masterPassword: "m", recoveryCode: "r", params: Self.fastParams)
+        let store = try newStore()
+        try await store.saveMeta(meta)
+
+        let sentinel = VaultCrypto.generateRecoveryCode(groups: 8, groupSize: 6)   // high-entropy
+        let items: [StoredItem] = try (0..<5).map { i in
+            let payload = Data(#"{"u":"user\#(i)","p":"\#(sentinel)"}"#.utf8)
+            return StoredItem(title: "Item \(i)", createdAt: fixedDate(1), modifiedAt: fixedDate(1),
+                              sealed: try VaultCrypto.encryptNewItem(payload, vaultKey: vaultKey),
+                              hosts: [Host(host: "site\(i).com", isPrimary: true)])
+        }
+        try await store.upsertMany(items)
+        let all = try await store.allItems()
+        XCTAssertEqual(all.count, 5)
+
+        try await store.walCheckpointForReview()
+        let sentinelBytes = Data(sentinel.utf8)
+        for url in store.databaseFileURLsForReview where FileManager.default.fileExists(atPath: url.path) {
+            let bytes = try Data(contentsOf: url)
+            XCTAssertNil(bytes.range(of: sentinelBytes), "bulk-imported secret leaked into \(url.lastPathComponent)")
+        }
+    }
+
     // Reset: wipeAll clears meta + items so hasVault() is false again.
     func test_wipeAll_clearsVault() async throws {
         let (meta, vaultKey) = try VaultCrypto.createVault(masterPassword: "m", recoveryCode: "r", params: Self.fastParams)

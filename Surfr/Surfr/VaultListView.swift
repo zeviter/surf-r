@@ -46,6 +46,7 @@ struct VaultListView: View {
     @State private var query = ""
     @State private var regeneratedCode: String?
     @State private var searchFocusToken = 0
+    @StateObject private var importer = ImportCoordinator()
 
     var body: some View {
         content
@@ -60,6 +61,10 @@ struct VaultListView: View {
             .sheet(item: Binding(get: { regeneratedCode.map(IdentifiedCode.init) },
                                  set: { regeneratedCode = $0?.value })) { wrapped in
                 RegeneratedKitSheet(code: wrapped.value) { regeneratedCode = nil }
+            }
+            .sheet(isPresented: Binding(get: { importer.isActive },
+                                        set: { if !$0 { importer.finish() } })) {
+                VaultImportSheet(coordinator: importer)
             }
     }
 
@@ -144,6 +149,9 @@ struct VaultListView: View {
             .help("Require Touch ID or your master password before revealing or copying a password")
 
             Spacer()
+
+            Button { importer.pickAndParse() } label: { Label("Import…", systemImage: "square.and.arrow.down") }
+                .help("Import logins from a LastPass / Bitwarden / Chrome / Safari CSV export")
 
             Button {
                 Task { regeneratedCode = await gate.regenerateRecoveryKit() }

@@ -142,6 +142,51 @@ final class VaultItemsTests: XCTestCase {
         XCTAssertTrue(BrowserState.shouldNavigateToVaultAfterUnlock(activeKind: .web))
     }
 
+    // MARK: - CSV import (Slice 5b)
+
+    private func candidate(_ title: String, host: String, user: String, pw: String) -> ImportCandidate {
+        ImportCandidate(title: title, hosts: [SurfrCore.Host(host: host, isPrimary: true)],
+                        payload: LoginPayload(username: user, password: pw, urls: ["https://\(host)"]))
+    }
+
+    func test_import_roundTrip() async {
+        let gate = await unlockedGate()
+        let summary = await gate.importLogins([
+            candidate("GitHub", host: "github.com", user: "alice", pw: "p1"),
+            candidate("X", host: "x.com", user: "bob", pw: "p2"),
+        ])
+        XCTAssertEqual(summary.imported, 2)
+        XCTAssertEqual(summary.skippedDuplicates, 0)
+        XCTAssertFalse(summary.failed)
+        XCTAssertEqual(gate.items.count, 2)
+        let gh = gate.items.first { $0.title == "GitHub" }!
+        XCTAssertEqual(gate.decryptPayload(gh)?.password, "p1")
+    }
+
+    func test_import_skipsExactDuplicates() async {
+        let gate = await unlockedGate()
+        let rows = [candidate("GitHub", host: "github.com", user: "alice", pw: "p1")]
+        _ = await gate.importLogins(rows)
+        let second = await gate.importLogins(rows)         // same file again
+        XCTAssertEqual(second.imported, 0)
+        XCTAssertEqual(second.skippedDuplicates, 1)
+        XCTAssertEqual(gate.items.count, 1, "exact duplicate must not double")
+    }
+
+    /// The flagged edge: same title+host+username but DIFFERENT password is a distinct credential —
+    /// it must NOT be deduped away.
+    func test_import_sameUserDifferentPassword_isNotDuplicate() async {
+        let gate = await unlockedGate()
+        let summary = await gate.importLogins([
+            candidate("Site", host: "site.com", user: "u", pw: "first"),
+            candidate("Site", host: "site.com", user: "u", pw: "second"),
+        ])
+        XCTAssertEqual(summary.imported, 2, "different password ⇒ not a duplicate")
+        XCTAssertEqual(summary.skippedDuplicates, 0)
+        let passwords = Set(gate.items.compactMap { gate.decryptPayload($0)?.password })
+        XCTAssertEqual(passwords, ["first", "second"])
+    }
+
     func test_lockClearsItems() async {
         let gate = await unlockedGate()
         await gate.saveItem(id: nil, title: "X", payload: LoginPayload(password: "p"), hosts: [])
