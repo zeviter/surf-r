@@ -372,6 +372,21 @@ schema already accommodates.
 **Start with Slice 1** (headless crypto core) — highest-risk, highest-leverage, no UI dependencies;
 getting the key hierarchy right unblocks everything else.
 
+> **Slice 5b as-built (CSV import).** Plaintext-file lifecycle is the design center: the CSV is read
+> **once**, read-only + uncached, under a **single security-scoped access window** held from pick →
+> parse → import → delete (released on every exit path); the raw bytes are wiped after parse and the
+> decrypted candidates dropped right after they're stored. Nothing is copied/moved/logged (only
+> counts). After import, the user is **prompted** to delete the original (never auto), with an honest
+> SSD/APFS secure-erase caveat. Rows encrypt under fresh per-item keys and commit in **one atomic
+> `upsertMany` transaction** (a failure changes nothing). Dedupe is **exact-match across all fields
+> incl. password** (same title/host/username but a different password is a distinct credential, not a
+> dupe). Formats auto-detected: LastPass + Bitwarden + Chrome + Safari (most-specific header match;
+> unknown → "unrecognized format" error); manual column-mapping + 1Password deferred. A correct
+> RFC-4180 parser (iterating **unicode scalars**, so `\r\n` isn't grapheme-clustered) handles quoted
+> commas/newlines. Bulk import fetches **zero** favicons — the list fetches lazily on row-appear,
+> now bounded by a `FaviconService` concurrency cap. LastPass omits TOTP seeds → a blanket re-add
+> note (Slice 7). 25 MB file cap; 0-row file → clean "no rows" message.
+
 ---
 
 ## 12. Human-only steps (pause and hand to the user)
