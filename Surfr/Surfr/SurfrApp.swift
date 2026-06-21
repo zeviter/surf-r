@@ -152,6 +152,12 @@ struct SurfrApp: App {
                     Task { await FaviconService.shared.runSelfTest() }
                 }
                 .keyboardShortcut("f", modifiers: [.command, .control, .option])
+
+                // F5 debug: erase the vault (SQLite + Keychain) for a genuinely fresh retest.
+                Button("Reset Vault (Debug)") {
+                    NotificationCenter.default.post(name: .resetVault, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: [.command, .control, .option])
                 #endif
             }
         }

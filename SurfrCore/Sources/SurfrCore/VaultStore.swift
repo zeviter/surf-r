@@ -164,6 +164,16 @@ public final class VaultStore {
         _ = try await dbQueue.write { db in try ItemRow.deleteOne(db, key: id.uuidString) }
     }
 
+    /// Wipe the entire vault (meta + all items/hosts/audit) — `hasVault()` returns false afterward.
+    /// Used by the "Reset vault" affordance so a reset clears the on-disk vault wherever it actually
+    /// lives (the sandbox container), paired with a Keychain purge for the biometric door.
+    public func wipeAll() async throws {
+        try await dbQueue.write { db in
+            try ItemRow.deleteAll(db)      // item_hosts + audit_cache cascade via FK
+            try MetaRow.deleteAll(db)
+        }
+    }
+
     // MARK: - Row assembly (static — never captures `self` into a GRDB closure)
 
     private static func assemble(_ row: ItemRow, _ db: Database) throws -> StoredItem {

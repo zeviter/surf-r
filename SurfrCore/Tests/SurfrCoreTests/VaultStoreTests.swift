@@ -176,6 +176,25 @@ final class VaultStoreTests: XCTestCase {
         XCTAssertTrue(dump.contains("\"algorithm\":\"argon2id\""), "kdf params should be JSON with argon2id")
     }
 
+    // Reset: wipeAll clears meta + items so hasVault() is false again.
+    func test_wipeAll_clearsVault() async throws {
+        let (meta, vaultKey) = try VaultCrypto.createVault(masterPassword: "m", recoveryCode: "r", params: Self.fastParams)
+        let store = try newStore()
+        try await store.saveMeta(meta)
+        try await store.upsert(StoredItem(title: "X", createdAt: fixedDate(1), modifiedAt: fixedDate(1),
+                                          sealed: try VaultCrypto.encryptNewItem(Data("x".utf8), vaultKey: vaultKey)))
+        var hasVault = try await store.hasVault()
+        XCTAssertTrue(hasVault)
+
+        try await store.wipeAll()
+        hasVault = try await store.hasVault()
+        XCTAssertFalse(hasVault)
+        let meta2 = try await store.loadMeta()
+        XCTAssertNil(meta2)
+        let items = try await store.allItems()
+        XCTAssertTrue(items.isEmpty)
+    }
+
     // 9 — Schema/version story.
     func test_migrator_idempotent_onReopen() async throws {
         let path = tempDir.appendingPathComponent("vault.sqlite")

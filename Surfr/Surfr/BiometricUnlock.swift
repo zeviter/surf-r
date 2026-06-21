@@ -69,24 +69,46 @@ final class SecureEnclaveBiometricUnlock: BiometricUnlocking, @unchecked Sendabl
 
         let context = LAContext()
         context.localizedCancelTitle = "Use master password"   // our own fallback owns the cancel path
-        wrapper.authenticationContext = context
+        context.touchIDAuthenticationAllowableReuseDuration = 10
         contextLock.lock(); activeContext = context; contextLock.unlock()
         defer { contextLock.lock(); activeContext = nil; contextLock.unlock() }
 
+        // Step 1 — present the biometric prompt via the LAContext directly. Unlike the implicit prompt
+        // inside SecKeyCreateDecryptedData, this one responds to `context.invalidate()` (cancel()) and
+        // to Esc, so choosing master/recovery actually dismisses it.
+        guard let access = SecAccessControlCreateWithFlags(
+            kCFAllocatorDefault, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            [.privateKeyUsage, .biometryCurrentSet], nil
+        ) else { throw BiometricFailure.failed }
+        do {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                context.evaluateAccessControl(access, operation: .useKeyDecrypt,
+                                              localizedReason: "Unlock your surf-r vault") { ok, err in
+                    if ok { cont.resume() } else { cont.resume(throwing: err ?? BiometricFailure.failed) }
+                }
+            }
+        } catch {
+            throw Self.classify(error)   // cancel/interrupt → benign; only the real SE failure invalidates
+        }
+
+        // Step 2 — decrypt reusing the just-authenticated context (within the reuse window, no second
+        // prompt). A failure HERE is the genuine SE path (e.g. invalidation).
+        wrapper.authenticationContext = context
         let wrapper = self.wrapper
         return try await Task.detached(priority: .userInitiated) {
-            do {
-                return try wrapper.unwrap(blob)                 // blocks on the Touch ID prompt
-            } catch {
-                throw Self.classify(error)
-            }
+            do { return try wrapper.unwrap(blob) }
+            catch { throw Self.classify(error) }
         }.value
     }
 
-    /// Cancel the in-flight prompt (the user chose master/recovery). Invalidating the context makes
-    /// the pending `SecKeyCreateDecryptedData` return a cancel → classified benign.
+    /// Cancel the in-flight prompt (the user chose master/recovery). Clears `activeContext` first so a
+    /// burst of calls (one per keystroke) only invalidates **once** — no `Code=-10 "Invalid context"`
+    /// loop on an already-invalidated context.
     func cancel() {
-        contextLock.lock(); let ctx = activeContext; contextLock.unlock()
+        contextLock.lock()
+        let ctx = activeContext
+        activeContext = nil
+        contextLock.unlock()
         ctx?.invalidate()
     }
 

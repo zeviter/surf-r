@@ -32,6 +32,8 @@ extension Notification.Name {
     static let openShortcuts = Notification.Name("openShortcuts")
     /// Vault (F5, Slice 3): open the password vault — routes to first-run / unlock / surface.
     static let openVault = Notification.Name("openVault")
+    /// Vault (F5, debug): erase the vault (SQLite + Keychain) and return to a clean first-run.
+    static let resetVault = Notification.Name("resetVault")
 }
 
 private let homeURL = URL(string: "https://duckduckgo.com")!
@@ -1571,6 +1573,15 @@ struct ContentView: View {
             #endif
         }
         .task { await vault.load() }
+        // Re-mirror biometric state when returning to the app (e.g. after changing/re-adding a
+        // fingerprint in System Settings) so the re-enable affordance recovers live. (Bug 2.)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            vault.refreshBiometricState()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .resetVault)) { _ in
+            showVault = false
+            Task { await vault.resetVault() }
+        }
         // §4 background auto-lock. Conservative trigger: lock when the app is HIDDEN (⌘H / Hide) — a
         // deliberate step-away — not on every focus loss, so glancing at another app/window doesn't
         // drop the session. (Full resign-active + 5-min idle-timer options are a documented follow-on.)

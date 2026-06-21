@@ -81,15 +81,42 @@ final class VaultGate: ObservableObject {
 
     /// Resolve the initial phase from disk (call once on appear).
     func load() async {
-        refreshBiometricState()
-        guard let store else { phase = .uninitialized; return }
+        guard let store else { phase = .uninitialized; refreshBiometricState(); return }
         // Don't clobber an in-progress first-run or an already-unlocked session.
         guard phase != .firstRun, phase != .unlocked else { return }
         let exists = (try? await store.hasVault()) ?? false
+        if !exists, biometric.isEnabled {
+            // Bug 1: the vault key copies live in the SQLite vault, but the biometric SE key/blob live
+            // in the Keychain. If the vault file is gone but Keychain material remains, that's an
+            // orphaned half-state — purge it so we present a clean first-run, not a broken unlock.
+            biometric.disable()
+            biometricInvalidated = false
+            vaultLog("orphaned biometric key material with no vault on disk → purged")
+        }
         phase = exists ? .locked : .uninitialized
+        refreshBiometricState()
         // NOTE (§4 "master on reboot"): this runs at app launch; `masterRequired` already forces master
-        // when no master auth has happened this install-session within the interval. A stricter
-        // boot-time comparison can be layered here later if desired.
+        // when no master auth has happened this install-session within the interval.
+    }
+
+    /// Erase the entire vault — the SQLite vault (wherever it lives, incl. the sandbox container) **and**
+    /// all Keychain biometric material — and return to a clean first-run. Backs the "Reset vault"
+    /// affordance so a retest starts from genuinely fresh state.
+    func resetVault() async {
+        lock.lock()
+        biometric.disable()
+        biometricInvalidated = false
+        try? await store?.wipeAll()
+        pendingMaster?.wipe(); pendingRecovery?.wipe()
+        pendingMaster = nil; pendingRecovery = nil; pendingMeta = nil
+        reducer = FirstRunReducer()
+        firstRunStep = .setMaster
+        recoveryCodeForDisplay = ""
+        lastError = nil
+        UserDefaults.standard.removeObject(forKey: lastMasterAuthKey)
+        phase = .uninitialized
+        refreshBiometricState()
+        vaultLog("vault reset — wiped SQLite vault + Keychain biometric material; clean first-run")
     }
 
     var isUnlocked: Bool { phase == .unlocked }
@@ -256,10 +283,14 @@ final class VaultGate: ObservableObject {
     /// reality — no app-restart needed.
     func refreshBiometricState() {
         let newState: BiometricState
-        if !biometric.isAvailable {
+        if biometricInvalidated {
+            // We KNOW the stored key is dead. Offer re-enable whenever biometry is usable; this must
+            // not be clobbered by a *transient* unavailability right after the failed decrypt — and it
+            // recovers live once biometry is back (e.g. a fingerprint re-added), via the refresh on
+            // app-activate / surface-appear. (Bug 2.)
+            newState = biometric.isAvailable ? .invalidated : .unavailable
+        } else if !biometric.isAvailable {
             newState = .unavailable
-        } else if biometricInvalidated {
-            newState = .invalidated
         } else {
             newState = biometric.isEnabled ? .enabled : .available
         }
