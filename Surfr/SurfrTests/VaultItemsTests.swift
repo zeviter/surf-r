@@ -133,6 +133,15 @@ final class VaultItemsTests: XCTestCase {
         XCTAssertEqual(gate.items.first?.title, "GitHub")
     }
 
+    /// Regression: unlocking from the locked card must STAY on the vault surface (locked-card →
+    /// unlocked-list), not eject to new-tab. The decision hinges on "already on the vault tab?".
+    func test_unlockTransitionMap_staysInVaultWhenAlreadyOnIt() {
+        // Lock→unlock happens on the vault tab → do NOT navigate (no eject).
+        XCTAssertFalse(BrowserState.shouldNavigateToVaultAfterUnlock(activeKind: .vault))
+        // First open from a web/new-tab page → navigate to the vault surface.
+        XCTAssertTrue(BrowserState.shouldNavigateToVaultAfterUnlock(activeKind: .web))
+    }
+
     func test_lockClearsItems() async {
         let gate = await unlockedGate()
         await gate.saveItem(id: nil, title: "X", payload: LoginPayload(password: "p"), hosts: [])

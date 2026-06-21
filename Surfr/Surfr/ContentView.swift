@@ -322,6 +322,13 @@ final class BrowserState: ObservableObject {
         surfaceReturnTarget = cameFrom   // where to return when this surface is toggled closed
     }
 
+    /// After a successful unlock, should we navigate to the vault surface? Only if we're NOT already
+    /// on it: unlocking from the locked card is a within-surface state change (locked-card →
+    /// unlocked-list) and must not route through openVaultPage's toggle/eject. Pure for testability.
+    static func shouldNavigateToVaultAfterUnlock(activeKind: Tab.Kind) -> Bool {
+        activeKind != .vault
+    }
+
     /// Eject the active internal surface if one is showing (e.g. after a vault reset) — back to the
     /// previous tab / new-tab, reusing the toggle-restore exit. No-op on a web tab.
     func dismissActiveSurface() {
@@ -1808,7 +1815,12 @@ struct ContentView: View {
         // just-opened vault shut — the "first open kicks me out" bug.
         guard showVault else { return }
         showVault = false
-        if vault.isUnlocked { browser.openVaultPage() }
+        // Navigate to the vault surface only if we're not already on it. Unlocking from the locked
+        // card happens *on* the vault tab — calling openVaultPage() there would toggle/eject it (the
+        // lock→unlock kick-out). Lock/unlock are within-surface state changes; stay put.
+        if vault.isUnlocked, BrowserState.shouldNavigateToVaultAfterUnlock(activeKind: browser.activeTab.kind) {
+            browser.openVaultPage()
+        }
     }
 
     /// Show a trust toast with a slide/fade in; replacing any current one restarts
