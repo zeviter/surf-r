@@ -148,6 +148,12 @@ decryptable). Three ways in (biometric and master password both reach UNLOCKED; 
 | **Auto-lock** | Lock on background / resign-active **and** a 5-minute idle timer (default). Options: Immediately / 1 / 5 / 15 / 30 / 60 min / On system lock. "Never" discouraged behind a warning. A ⌘-shortcut locks instantly. |
 | **On lock** | Zero the vault key and any derived material from memory; the encrypted vault stays on disk. |
 
+> **Slice 4 as-built — biometric design + accepted Apple-platform limitations** (verified on M1 Pro):
+> - **Single source of truth.** Biometric auth-state is one value — `unavailable | available | enabled | invalidated` — that every view derives from; transitions go through one refresh. Error classification is **inverted/allowlisted**: only the genuine Secure-Enclave failure (AKSError `-536362999`, "unable to compute shared secret") disables biometric; **all** cancels/interrupts (`userCancel`, `systemCancel` "canceled by another authentication", `appCancel`, lockout, unknown) are benign no-ops that fall back to master and leave biometric enabled.
+> - **Lazy enrolment-change detection (intended).** `.biometryCurrentSet` invalidation is detected only on the **next unlock attempt** — macOS pushes no enrolment-change event — and the app can only see "the set changed," not add-vs-remove. Standard password-manager behaviour. On detection: disable + "Touch ID was reset" + live **Re-enable** (recovers without restart once biometry is usable again, via a refresh on app-activate).
+> - **Single implicit SE prompt.** Unlock uses one `SecKeyCreateDecryptedData` that drives the Touch ID prompt *and* the ECIES decrypt together. A two-step `evaluateAccessControl`→reuse approach (which would let the prompt cancel cleanly) **does not drive the ECIES decrypt on real Secure Enclave hardware**, so it's not used.
+> - **Prompt dismissal is best-effort (deferred polish).** Because the prompt is the system-owned `LAContext` dialog inside the implicit decrypt, choosing master/recovery only *best-effort* dismisses it (`cancel()` invalidates the context); **Esc / typing-master may not reliably dismiss the floating prompt**. Master unlock still works regardless — cosmetic. A `DeviceOwnerAuthentication`-style clean fix is deferred to a later hardware-iteration round.
+
 ---
 
 ## 5. Recovery for a lost master password
