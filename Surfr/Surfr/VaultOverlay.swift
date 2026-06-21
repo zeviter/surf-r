@@ -201,8 +201,12 @@ private struct UnlockView: View {
                 }
 
                 HStack {
-                    Button("Use recovery code") { gate.clearError(); showRecovery = true }
-                        .buttonStyle(.link)
+                    Button("Use recovery code") {
+                        gate.cancelBiometricPrompt()        // master/recovery and biometric are mutually exclusive
+                        gate.clearError()
+                        showRecovery = true
+                    }
+                    .buttonStyle(.link)
                     Spacer()
                     if gate.isWorking { ProgressView().controlSize(.small).padding(.trailing, 6) }
                     Button("Unlock", action: attempt)
@@ -212,6 +216,10 @@ private struct UnlockView: View {
                 .padding(.top, 4)
             }
             .padding(22)
+            // Typing the master password dismisses any in-flight Touch ID prompt (mutually exclusive).
+            .onChange(of: password) { _, newValue in
+                if !newValue.isEmpty { gate.cancelBiometricPrompt() }
+            }
             // Biometric fires automatically on present (WF-3 / §4), once; master is always the fallback.
             .task {
                 guard !biometricTried else { return }
@@ -228,6 +236,7 @@ private struct UnlockView: View {
 
     private func attempt() {
         guard !password.isEmpty else { return }
+        gate.cancelBiometricPrompt()       // dismiss any pending prompt before the master attempt
         Task { if await gate.unlock(master: password) { onClose() } }
     }
 }
@@ -247,12 +256,26 @@ private struct RecoveryResetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VaultHeader(title: "Reset master password",
-                        subtitle: "Enter your recovery code, then choose a new master password.")
+                        subtitle: "Your master password can’t be recovered. Enter your recovery code and set a brand-new master password.")
 
-            VaultPlainField(placeholder: "Recovery code", text: $code, autoFocus: true)
-            VaultPasswordField(placeholder: "New master password", text: $newMaster)
-            if !newMaster.isEmpty { PasswordStrengthMeter(strength: strength) }
-            VaultPasswordField(placeholder: "Confirm new master password", text: $confirm)
+            // Step 1 — recovery code.
+            VStack(alignment: .leading, spacing: 6) {
+                Label("1  Enter your recovery code", systemImage: "1.circle.fill")
+                    .font(.callout).bold().foregroundStyle(.secondary)
+                VaultPlainField(placeholder: "XXXXX-XXXXX-…", text: $code, autoFocus: true)
+            }
+
+            // Step 2 — new master (never "existing" — the premise is the old one is lost).
+            VStack(alignment: .leading, spacing: 6) {
+                Label("2  Set a new master password", systemImage: "2.circle.fill")
+                    .font(.callout).bold().foregroundStyle(.secondary)
+                VaultPasswordField(placeholder: "New master password", text: $newMaster)
+                if !newMaster.isEmpty { PasswordStrengthMeter(strength: strength) }
+                VaultPasswordField(placeholder: "Confirm new master password", text: $confirm)
+                if !confirm.isEmpty && confirm != newMaster {
+                    Text("Passwords don’t match.").font(.caption).foregroundStyle(.red)
+                }
+            }
 
             if let error = gate.lastError {
                 Text(error).font(.caption).foregroundStyle(.red)
@@ -262,7 +285,7 @@ private struct RecoveryResetView: View {
                 Button("Back") { gate.clearError(); onBack() }
                 Spacer()
                 if gate.isWorking { ProgressView().controlSize(.small).padding(.trailing, 6) }
-                Button("Reset & Unlock") {
+                Button("Set New Master & Unlock") {
                     Task { if await gate.resetWithRecovery(code: code, newMaster: newMaster) { onClose() } }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -271,6 +294,8 @@ private struct RecoveryResetView: View {
             .padding(.top, 4)
         }
         .padding(22)
+        // Entering recovery suppresses/cancels any in-flight Touch ID prompt entirely.
+        .onAppear { gate.cancelBiometricPrompt() }
     }
 }
 

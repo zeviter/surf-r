@@ -25,6 +25,9 @@ protocol BiometricUnlocking: AnyObject, Sendable {
     func disable()
     /// Prompt biometrics and return the vault key. Throws `BiometricFailure` on any non-success.
     func unlock() async throws -> SymmetricKey
+    /// Cancel an in-flight `unlock()` prompt (e.g. the user chose master / recovery instead). The
+    /// pending `unlock()` then throws a cancel, which is a benign no-op.
+    func cancel()
 }
 
 /// Real biometric door: `SecureEnclaveWrapper` (ECIES to an SE P-256 key) + a Keychain-stored wrapped
@@ -53,12 +56,22 @@ final class SecureEnclaveBiometricUnlock: BiometricUnlocking, @unchecked Sendabl
         wrapper.deleteKey()
     }
 
+    /// The Secure-Enclave error code that means the stored key can no longer derive the ECIES shared
+    /// secret — i.e. a real `.biometryCurrentSet` invalidation (AKSError "unable to compute shared
+    /// secret"). This is the ONLY failure that disables biometric.
+    private static let invalidationAKSCode = -536362999
+
+    private let contextLock = NSLock()
+    private var activeContext: LAContext?
+
     func unlock() async throws -> SymmetricKey {
         guard let blob = loadBlob() else { throw BiometricFailure.notEnabled }
 
         let context = LAContext()
         context.localizedCancelTitle = "Use master password"   // our own fallback owns the cancel path
         wrapper.authenticationContext = context
+        contextLock.lock(); activeContext = context; contextLock.unlock()
+        defer { contextLock.lock(); activeContext = nil; contextLock.unlock() }
 
         let wrapper = self.wrapper
         return try await Task.detached(priority: .userInitiated) {
@@ -70,21 +83,45 @@ final class SecureEnclaveBiometricUnlock: BiometricUnlocking, @unchecked Sendabl
         }.value
     }
 
-    /// Map an SE/LA error to a gate outcome. A user **cancel** must leave biometric untouched (no-op,
-    /// master fallback); a **lockout** is a transient "try again later"; **every other** failure of a
-    /// stored biometric key means it's no longer usable (the `.biometryCurrentSet` enrolment change
-    /// invalidated it → "unable to compute shared secret"), so it's `.invalidated` on the first failure.
-    static func classify(_ error: Error) -> BiometricFailure {
-        if isUserCancel(error) { return .userCancelled }
-        if let laError = error as? LAError, laError.code == .biometryLockout { return .failed }
-        return .invalidated
+    /// Cancel the in-flight prompt (the user chose master/recovery). Invalidating the context makes
+    /// the pending `SecKeyCreateDecryptedData` return a cancel → classified benign.
+    func cancel() {
+        contextLock.lock(); let ctx = activeContext; contextLock.unlock()
+        ctx?.invalidate()
     }
 
-    /// Detect a user/system cancel across the shapes it arrives in: an `LAError` cancel, a raw
-    /// `Code=-2` (`LAError.userCancel`) or `errSecUserCanceled` (-128) in any domain, or one nested
-    /// under `NSUnderlyingErrorKey`. This is what keeps dismissing the Touch ID prompt from being
-    /// misread as an enrolment-change invalidation.
-    static func isUserCancel(_ error: Error) -> Bool {
+    /// Classify an SE/LA failure — **inverted by design**: instead of denylisting cancels one code at a
+    /// time, we **allowlist the single genuine invalidation** (the Secure Enclave can't compute the
+    /// shared secret because `.biometryCurrentSet` changed). EVERYTHING else — user cancel (-2),
+    /// system cancel / "canceled by another authentication" (-4), app cancel (-9), lockout, anything
+    /// unknown — is benign: biometric STAYS enabled and we fall back to master. Only `.invalidated`
+    /// disables, and only the real enrolment-change trips it.
+    static func classify(_ error: Error) -> BiometricFailure {
+        if isGenuineInvalidation(error) { return .invalidated }
+        if isCancel(error) { return .userCancelled }   // silent no-op
+        return .failed                                  // soft message, still enabled
+    }
+
+    /// True only for the real `.biometryCurrentSet` invalidation: AKSError `-536362999` or the
+    /// "unable to compute shared secret" signature, anywhere in the underlying-error chain.
+    static func isGenuineInvalidation(_ error: Error) -> Bool {
+        var current: NSError? = error as NSError
+        var depth = 0
+        while let e = current, depth < 8 {
+            if e.code == invalidationAKSCode { return true }
+            let blob = "\(e.domain) \(e.code) \(e.userInfo)".lowercased()
+            if blob.contains("unable to compute shared secret") || blob.contains("\(invalidationAKSCode)") {
+                return true
+            }
+            current = e.userInfo[NSUnderlyingErrorKey] as? NSError
+            depth += 1
+        }
+        return false
+    }
+
+    /// Best-effort cancel/interrupt detection (used only to suppress the soft message; cancels never
+    /// disable biometric either way).
+    static func isCancel(_ error: Error) -> Bool {
         if let laError = error as? LAError {
             switch laError.code {
             case .userCancel, .appCancel, .systemCancel: return true
@@ -92,8 +129,11 @@ final class SecureEnclaveBiometricUnlock: BiometricUnlocking, @unchecked Sendabl
             }
         }
         let ns = error as NSError
-        if ns.code == LAError.userCancel.rawValue || ns.code == Int(errSecUserCanceled) { return true }
-        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError { return isUserCancel(underlying) }
+        let cancelCodes: Set<Int> = [LAError.userCancel.rawValue, LAError.systemCancel.rawValue,
+                                     LAError.appCancel.rawValue, Int(errSecUserCanceled)]
+        if cancelCodes.contains(ns.code) { return true }
+        if ns.localizedDescription.lowercased().contains("cancel") { return true }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError { return isCancel(underlying) }
         return false
     }
 

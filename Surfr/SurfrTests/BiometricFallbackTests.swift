@@ -1,5 +1,6 @@
 import XCTest
 import CryptoKit
+import LocalAuthentication
 @testable import Surfr
 
 /// In-memory stand-in for the Secure Enclave door, so the gate's fallback logic can be tested without
@@ -13,6 +14,7 @@ final class MockBiometricUnlock: BiometricUnlocking, @unchecked Sendable {
     private(set) var enableCount = 0
     private(set) var disableCount = 0
     private(set) var unlockCount = 0
+    private(set) var cancelCount = 0
 
     var isAvailable: Bool { available }
     var isEnabled: Bool { stored != nil }
@@ -24,6 +26,47 @@ final class MockBiometricUnlock: BiometricUnlocking, @unchecked Sendable {
         if let f = nextUnlockFailure { throw f }
         guard let stored else { throw BiometricFailure.notEnabled }
         return stored
+    }
+    func cancel() { cancelCount += 1 }
+}
+
+/// Headless tests for the **inverted** error classification — the actual root cause across three
+/// rounds. Only the genuine Secure-Enclave invalidation (AKSError -536362999 / "unable to compute
+/// shared secret") may disable biometric; every cancel/interrupt must be benign.
+final class BiometricClassifyTests: XCTestCase {
+    private typealias C = SecureEnclaveBiometricUnlock
+
+    func test_genuineInvalidation_byAKSCode() {
+        XCTAssertEqual(C.classify(NSError(domain: "CryptoTokenKit", code: -536362999)), .invalidated)
+    }
+
+    func test_genuineInvalidation_byMessage() {
+        let e = NSError(domain: "NSOSStatusErrorDomain", code: -3,
+                        userInfo: [NSLocalizedDescriptionKey: "CryptoTokenKit: unable to compute shared secret"])
+        XCTAssertEqual(C.classify(e), .invalidated)
+    }
+
+    func test_genuineInvalidation_nestedUnderlying() {
+        let aks = NSError(domain: "com.apple.kernel.AppleKeyStore", code: -536362999)
+        let top = NSError(domain: "CryptoTokenKit", code: -3, userInfo: [NSUnderlyingErrorKey: aks])
+        XCTAssertEqual(C.classify(top), .invalidated)
+    }
+
+    func test_systemCancel_isNOTinvalidation() {   // the -4 "canceled by another authentication" bug
+        XCTAssertEqual(C.classify(LAError(.systemCancel)), .userCancelled)
+        XCTAssertEqual(C.classify(NSError(domain: LAError.errorDomain, code: -4)), .userCancelled)
+    }
+
+    func test_userAndAppCancel_areNOTinvalidation() {
+        XCTAssertEqual(C.classify(LAError(.userCancel)), .userCancelled)
+        XCTAssertEqual(C.classify(LAError(.appCancel)), .userCancelled)
+        XCTAssertEqual(C.classify(NSError(domain: "X", code: Int(errSecUserCanceled))), .userCancelled)
+    }
+
+    func test_unknownFailure_isBenign_notInvalidation() {
+        // Anything not the genuine SE failure must NOT disable biometric.
+        XCTAssertNotEqual(C.classify(LAError(.biometryLockout)), .invalidated)
+        XCTAssertNotEqual(C.classify(NSError(domain: "Whatever", code: -25293)), .invalidated)
     }
 }
 

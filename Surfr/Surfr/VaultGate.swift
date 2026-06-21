@@ -22,11 +22,24 @@ final class VaultGate: ObservableObject {
     @Published private(set) var isWorking = false
     @Published private(set) var lastError: String?
 
-    // Biometric door (Slice 4). `available` = hardware enrolled; `enabled` = we have a stored SE blob;
-    // `needsReenroll` = a stored key was invalidated (enrolment changed) and should be re-enabled.
-    @Published private(set) var biometricAvailable = false
-    @Published private(set) var biometricEnabled = false
-    @Published private(set) var needsBiometricReenroll = false
+    /// The **single source of truth** for the biometric door's auth-state. Every view derives from
+    /// this; every transition goes through `refreshBiometricState()` / the enable/disable/invalidate
+    /// helpers — never set piecemeal.
+    enum BiometricState: Equatable {
+        case unavailable   // no biometric hardware / not enrolled in the OS
+        case available     // usable, but the user hasn't enabled it for the vault
+        case enabled       // enabled + a usable stored SE key
+        case invalidated   // was enabled; the SE key died (enrolment changed) → re-enable needed
+    }
+    @Published private(set) var biometricState: BiometricState = .unavailable
+    /// Sticky for the session: a genuine invalidation we've observed (the stored key was deleted, so
+    /// the service alone can't report it). Cleared on enable/disable.
+    private var biometricInvalidated = false
+
+    // Convenience views over the single source (kept so call sites read naturally).
+    var biometricAvailable: Bool { biometricState != .unavailable }
+    var biometricEnabled: Bool { biometricState == .enabled }
+    var needsBiometricReenroll: Bool { biometricState == .invalidated }
 
     private let store: VaultStore?
     private let lock = VaultLock()
@@ -64,12 +77,11 @@ final class VaultGate: ObservableObject {
     }
 
     /// Whether the unlock screen should auto-offer biometrics right now.
-    var shouldOfferBiometric: Bool { biometricEnabled && biometricAvailable && !masterRequired }
+    var shouldOfferBiometric: Bool { biometricState == .enabled && !masterRequired }
 
     /// Resolve the initial phase from disk (call once on appear).
     func load() async {
-        biometricAvailable = biometric.isAvailable
-        biometricEnabled = biometric.isEnabled
+        refreshBiometricState()
         guard let store else { phase = .uninitialized; return }
         // Don't clobber an in-progress first-run or an already-unlocked session.
         guard phase != .firstRun, phase != .unlocked else { return }
@@ -224,8 +236,8 @@ final class VaultGate: ObservableObject {
         guard phase == .unlocked else { return }
         do {
             try lock.withVaultKey { try biometric.enable(vaultKey: $0) }
-            biometricEnabled = true
-            needsBiometricReenroll = false
+            biometricInvalidated = false
+            refreshBiometricState()
             vaultLog("biometric enabled (vault key wrapped to Secure Enclave)")
         } catch {
             lastError = "Could not enable Touch ID."
@@ -235,16 +247,29 @@ final class VaultGate: ObservableObject {
 
     func disableBiometric() {
         biometric.disable()
-        biometricEnabled = false
-        needsBiometricReenroll = false
+        biometricInvalidated = false
+        refreshBiometricState()
     }
 
-    /// Re-read live biometric availability/enabled state so a surface always mirrors the truth (e.g.
-    /// after an invalidation→master-login, the affordance updates without an app restart).
+    /// Recompute the single biometric state from the source of truth (service availability/enabled +
+    /// the sticky invalidation flag). Called on every surface/overlay appear so the UI always mirrors
+    /// reality — no app-restart needed.
     func refreshBiometricState() {
-        biometricAvailable = biometric.isAvailable
-        biometricEnabled = biometric.isEnabled
+        let newState: BiometricState
+        if !biometric.isAvailable {
+            newState = .unavailable
+        } else if biometricInvalidated {
+            newState = .invalidated
+        } else {
+            newState = biometric.isEnabled ? .enabled : .available
+        }
+        if newState != biometricState { biometricState = newState }
     }
+
+    /// Cancel an in-flight Touch ID prompt — called when the user turns to master/recovery so the two
+    /// paths are mutually exclusive (the prompt dismisses; the pending unlock resolves as a benign
+    /// cancel that leaves biometric enabled).
+    func cancelBiometricPrompt() { biometric.cancel() }
 
     /// Regenerate the Recovery Kit (authenticated): mint a fresh recovery code, re-wrap **copy 2** of
     /// the vault key under it (old code stops working), persist, and return the new code for the kit
@@ -261,7 +286,12 @@ final class VaultGate: ObservableObject {
                 try VaultCrypto.rewrapForNewRecovery(vaultKey: key, newRecoveryCode: newCode, meta: meta)
             }
             try await store.saveMeta(newMeta)
-            vaultLog("recovery kit regenerated (copy 2 re-wrapped; old code invalidated)")
+            // Observable proof (no secrets): the recovery salt + wrapped copy must have changed, which
+            // is what makes the OLD code stop working. The new code is fresh CSPRNG (see test).
+            let reloaded = try? await store.loadMeta()
+            let saltChanged = reloaded?.kdfSaltRecovery != meta.kdfSaltRecovery
+            let blobChanged = reloaded?.wrappedVaultKeyRecovery != meta.wrappedVaultKeyRecovery
+            vaultLog("recovery kit regenerated — recovery salt changed=\(saltChanged ?? false), wrapped copy changed=\(blobChanged ?? false); old code now invalid")
             return newCode
         } catch {
             lastError = "Could not regenerate the Recovery Kit."
@@ -302,9 +332,8 @@ final class VaultGate: ObservableObject {
     /// message — all on the first failure, no retry lag.
     private func handleBiometricInvalidation() {
         biometric.disable()
-        biometricEnabled = false
-        needsBiometricReenroll = true
-        biometricAvailable = biometric.isAvailable
+        biometricInvalidated = true        // sticky for the session
+        refreshBiometricState()            // → .invalidated (single source of truth)
         lastError = "Touch ID was reset. Unlock with your master password."
         vaultLog("biometric invalidated (enrolment changed) → disabled, master required, re-enroll offered")
     }
