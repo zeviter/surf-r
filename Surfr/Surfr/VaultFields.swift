@@ -7,7 +7,9 @@ import AppKit
 struct OutlinedCheckboxToggleStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
         Button { configuration.isOn.toggle() } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            // `.center` (not `.firstTextBaseline`): the box's baseline shifts when the check appears,
+            // which nudged the label a few px on toggle. Center keeps the row stable.
+            HStack(alignment: .center, spacing: 8) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(configuration.isOn ? Color.accentColor : Color.clear)

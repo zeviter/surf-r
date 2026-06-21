@@ -414,6 +414,7 @@ private struct TouchIDStatusRow: View {
                 }
             }
             .toggleStyle(.switch)
+            .tint(.green)               // unmistakable on-state fill
         }
     }
 }
