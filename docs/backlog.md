@@ -46,6 +46,16 @@
 - ☐ **Custom title bar (unlocks).** Would enable a **centered window title** and a real **trusted
   badge graphic** in the title (currently text-only, "· Trusted: <Domain>"), both blocked by
   Tahoe's plain-text leading-aligned system title.
+## C2. Browser feature shortcuts (separate stream — NOT vault work)
+
+- ☐ **Web Inspector shortcut `⌘⇧I`.** The DEBUG Web Inspector already exists via `isInspectable`;
+  this just wires the shortcut. **Decide:** keep it DEBUG-only, or expose in release (most browsers
+  do) — flag the privacy/footgun tradeoff before exposing.
+- ☐ **Save Page `⌘S`.** Reuses the existing **User-Selected-File Read/Write** entitlement +
+  `NSSavePanel` path already added for the Recovery Kit — **no new entitlement**. Confirm during build.
+- ☐ **Print / Print-to-PDF `⌘P`.** Reuses the `NSPrintOperation` path already touched for the
+  Recovery Kit.
+
 ## D. Known limitations (documented; by-design or low priority)
 
 - **Schemeless single-label hosts** (e.g. `intranet`, `devbox:3000`) parse as searches — workaround
