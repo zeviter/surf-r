@@ -14,9 +14,15 @@ final class VaultItemDetailModel: ObservableObject {
     @Published private(set) var hasTOTP = false
     @Published private(set) var revealed: String?       // nil = masked
     @Published private(set) var loadFailed = false
+    /// When biometric reveal is cancelled/unavailable, the view shows a master-password fallback (6a).
+    @Published var awaitingMaster = false
+    @Published var masterError = false
 
     private var password = WipeableSecret("")
     private(set) var isWiped = false
+
+    private enum Pending { case none, reveal, copy }
+    private var pending: Pending = .none
 
     /// Test/seam-friendly load from an already-decrypted payload.
     func load(payload: LoginPayload, hosts: [SurfrCore.Host]) {
@@ -33,23 +39,45 @@ final class VaultItemDetailModel: ObservableObject {
         load(payload: payload, hosts: item.stored.hosts)
     }
 
-    /// Reveal the password (biometric-gated). On cancel → stays masked, no error.
-    func reveal(gate: VaultGate) async {
-        guard await gate.authenticateForReveal() else { return }
-        revealed = password.reveal()
-    }
-
     func conceal() { revealed = nil }
 
-    func copyPassword(gate: VaultGate) async {
-        guard await gate.authenticateForReveal() else { return }
-        VaultClipboard.copyConcealed(password.reveal())
+    /// Reveal/copy with the reveal-auth policy (6a/6b): if auth not required → do it directly; else try
+    /// Touch ID; on cancel/no-biometric → fall back to the master-password prompt (never a dead-end).
+    func requestReveal(gate: VaultGate) async { await authThenPerform(.reveal, gate: gate) }
+    func requestCopy(gate: VaultGate) async { await authThenPerform(.copy, gate: gate) }
+
+    private func authThenPerform(_ action: Pending, gate: VaultGate) async {
+        if !gate.requireAuthToReveal { perform(action); return }
+        if gate.biometricState == .enabled, await gate.biometricAuthenticateForReveal() {
+            perform(action); return
+        }
+        pending = action
+        masterError = false
+        awaitingMaster = true   // show the master-password fallback
+    }
+
+    /// Master-password fallback submit (6a). On success, perform the pending reveal/copy.
+    func submitMaster(_ password: String, gate: VaultGate) async {
+        guard await gate.verifyMaster(password) else { masterError = true; return }
+        awaitingMaster = false; masterError = false
+        perform(pending); pending = .none
+    }
+
+    func cancelMaster() { awaitingMaster = false; masterError = false; pending = .none }
+
+    private func perform(_ action: Pending) {
+        switch action {
+        case .reveal: revealed = password.reveal()
+        case .copy: VaultClipboard.copyConcealed(password.reveal())
+        case .none: break
+        }
     }
 
     /// Zero the password buffer and clear all decrypted fields. Called on disappear.
     func wipe() {
         password.wipe()
         username = ""; website = ""; notes = ""; revealed = nil; hasTOTP = false
+        awaitingMaster = false; masterError = false; pending = .none
         isWiped = true
     }
 
@@ -129,14 +157,42 @@ struct VaultItemView: View {
                     .textSelection(.enabled)
                 Spacer()
                 Button {
-                    if model.revealed == nil { Task { await model.reveal(gate: gate) } } else { model.conceal() }
+                    if model.revealed == nil { Task { await model.requestReveal(gate: gate) } } else { model.conceal() }
                 } label: { Image(systemName: model.revealed == nil ? "eye.fill" : "eye.slash.fill") }
-                    .buttonStyle(.plain).help(model.revealed == nil ? "Reveal (Touch ID)" : "Hide")
-                Button { Task { await model.copyPassword(gate: gate) } } label: { Image(systemName: "doc.on.doc") }
-                    .buttonStyle(.plain).help("Copy password (Touch ID)")
+                    .buttonStyle(.plain).help(model.revealed == nil ? "Reveal" : "Hide")
+                Button { Task { await model.requestCopy(gate: gate) } } label: { Image(systemName: "doc.on.doc") }
+                    .buttonStyle(.plain).help("Copy password")
             }
             .padding(8)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.gray.opacity(0.08)))
+
+            if model.awaitingMaster { masterFallback }
+        }
+    }
+
+    /// Master-password fallback for reveal/copy (6a) — shown when biometric is cancelled/unavailable.
+    @State private var fallbackMaster = ""
+    private var masterFallback: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Enter your master password to reveal").font(.caption).foregroundStyle(.secondary)
+            HStack {
+                VaultPasswordField(placeholder: "Master password", text: $fallbackMaster, autoFocus: true,
+                                   onSubmit: { submitFallback() })
+                Button("Reveal") { submitFallback() }.keyboardShortcut(.defaultAction)
+                Button("Cancel") { fallbackMaster = ""; model.cancelMaster() }
+            }
+            if model.masterError {
+                Text("Incorrect master password.").font(.caption).foregroundStyle(.red)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func submitFallback() {
+        let pw = fallbackMaster
+        Task {
+            await model.submitMaster(pw, gate: gate)
+            if !model.awaitingMaster { fallbackMaster = "" }   // cleared on success
         }
     }
 

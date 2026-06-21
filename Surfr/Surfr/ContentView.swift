@@ -1517,6 +1517,10 @@ struct ContentView: View {
     @StateObject private var vault = VaultGate()
     /// Whether the vault gate overlay (first-run or unlock) is presented.
     @State private var showVault = false
+    #if DEBUG
+    /// DEBUG-only: confirm before the destructive Reset Vault wipe.
+    @State private var showResetConfirm = false
+    #endif
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1607,10 +1611,20 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             vault.refreshBiometricState()
         }
+        #if DEBUG
         .onReceive(NotificationCenter.default.publisher(for: .resetVault)) { _ in
-            showVault = false
-            Task { await vault.resetVault() }
+            showResetConfirm = true   // high-friction confirm — never a one-chord wipe
         }
+        .confirmationDialog("Erase the entire vault?", isPresented: $showResetConfirm, titleVisibility: .visible) {
+            Button("Erase Vault", role: .destructive) {
+                showVault = false
+                Task { await vault.resetVault() }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This permanently deletes ALL saved logins and Touch ID setup for surf-r. This cannot be undone.")
+        }
+        #endif
         // §4 background auto-lock. Conservative trigger: lock when the app is HIDDEN (⌘H / Hide) — a
         // deliberate step-away — not on every focus loss, so glancing at another app/window doesn't
         // drop the session. (Full resign-active + 5-min idle-timer options are a documented follow-on.)

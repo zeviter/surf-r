@@ -315,20 +315,35 @@ final class VaultGate: ObservableObject {
         await loadItems()
     }
 
-    /// Biometric gate for revealing/copying a password (WF-5). If biometric isn't enabled, the vault
-    /// is already unlocked so reveal proceeds (`true`). If enabled, require a fresh Touch ID via
-    /// `LAContext.evaluatePolicy` — the reliable LA path (not the SE decrypt). **A cancel returns
-    /// `false`**, so the caller simply stays masked: a no-op, never an error.
-    func authenticateForReveal() async -> Bool {
-        guard biometricState == .enabled else { return true }
+    /// Setting (WF-5, 6b): require authentication before revealing/copying a password — independent of
+    /// whether biometric *unlock* is enabled. Default **ON** (it's a password manager). When off,
+    /// reveal/copy is direct (the vault is already unlocked).
+    @Published var requireAuthToReveal: Bool = (UserDefaults.standard.object(forKey: "SurfrVaultRequireAuthToReveal") as? Bool) ?? true {
+        didSet { UserDefaults.standard.set(requireAuthToReveal, forKey: "SurfrVaultRequireAuthToReveal") }
+    }
+
+    /// Fresh biometric check for reveal/copy via `LAContext.evaluatePolicy` (the reliable LA path, not
+    /// the SE decrypt). Returns false on cancel/failure → the caller then offers the master-password
+    /// fallback (6a). Only meaningful when `biometricState == .enabled`.
+    func biometricAuthenticateForReveal() async -> Bool {
         let context = LAContext()
-        context.localizedCancelTitle = "Cancel"
+        context.localizedCancelTitle = "Use master password"
         return await withCheckedContinuation { cont in
             context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
                                    localizedReason: "Reveal your password") { ok, _ in
                 cont.resume(returning: ok)
             }
         }
+    }
+
+    /// Verify the master password (the reveal fallback) WITHOUT changing lock state — re-derives the
+    /// KEK and confirms it unwraps the vault key.
+    func verifyMaster(_ password: String) async -> Bool {
+        guard let store, let meta = try? await store.loadMeta() else { return false }
+        let ok = await Task.detached(priority: .userInitiated) {
+            (try? VaultCrypto.unlockWithMaster(password, meta: meta)) != nil
+        }.value
+        return ok
     }
 
     // MARK: - Biometric door (Slice 4)

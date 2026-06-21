@@ -84,11 +84,37 @@ final class VaultItemsTests: XCTestCase {
         XCTAssertTrue(gate.items.isEmpty)
     }
 
-    func test_revealWorksDirectlyWhenBiometricNotEnabled() async {
-        // With biometric not enabled, authenticateForReveal returns true without any prompt.
+    func test_revealDirect_whenAuthNotRequired() async {
         let gate = await unlockedGate()
-        let allowed = await gate.authenticateForReveal()
-        XCTAssertTrue(allowed)
+        gate.requireAuthToReveal = false
+        await gate.saveItem(id: nil, title: "X", payload: LoginPayload(password: "secret"), hosts: [])
+        let model = VaultItemDetailModel()
+        model.load(payload: gate.decryptPayload(gate.items[0])!, hosts: [])
+        await model.requestReveal(gate: gate)
+        XCTAssertEqual(model.revealed, "secret")
+        XCTAssertFalse(model.awaitingMaster)
+    }
+
+    /// 6a/6b: auth required + no biometric → master-password fallback (never a dead-end); wrong master
+    /// errors, correct master reveals.
+    func test_revealMasterFallback_whenAuthRequired() async {
+        let gate = await unlockedGate()        // mock biometric unavailable → biometric branch skipped
+        gate.requireAuthToReveal = true
+        await gate.saveItem(id: nil, title: "X", payload: LoginPayload(password: "secret"), hosts: [])
+        let model = VaultItemDetailModel()
+        model.load(payload: gate.decryptPayload(gate.items[0])!, hosts: [])
+
+        await model.requestReveal(gate: gate)
+        XCTAssertTrue(model.awaitingMaster)
+        XCTAssertNil(model.revealed)
+
+        await model.submitMaster("wrong-password", gate: gate)
+        XCTAssertTrue(model.masterError)
+        XCTAssertNil(model.revealed)
+
+        await model.submitMaster(master, gate: gate)
+        XCTAssertEqual(model.revealed, "secret")
+        XCTAssertFalse(model.awaitingMaster)
     }
 
     /// Regression for the trust-destroying bug: lock clears the in-memory list, but unlocking again

@@ -130,8 +130,11 @@ struct VaultListView: View {
     private var securityBar: some View {
         HStack(spacing: 14) {
             if gate.biometricAvailable {
-                TouchIDStatusRow(gate: gate).frame(maxWidth: 280)
+                TouchIDStatusRow(gate: gate).frame(maxWidth: 240)
             }
+            Toggle("Require auth to reveal", isOn: $gate.requireAuthToReveal)
+                .toggleStyle(.checkbox)
+                .help("Require Touch ID or your master password before revealing/copying a password")
             Spacer()
             Button {
                 Task { regeneratedCode = await gate.regenerateRecoveryKit() }
