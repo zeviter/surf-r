@@ -317,78 +317,10 @@ private struct VaultHeader: View {
     }
 }
 
-// MARK: - Vault surface placeholder (Slice 3 stub; list/detail arrive in Slice 5)
-
-/// The full-page vault surface shown once unlocked. Slice 3 ships a placeholder so the flow is
-/// verifiable end-to-end; Slice 5 replaces it with the `PageScaffold` list/detail/add-edit.
-struct VaultSurfacePlaceholder: View {
-    @EnvironmentObject private var gate: VaultGate
-    @State private var regeneratedCode: String?
-
-    var body: some View {
-        Group {
-            // The surface reflects the live session state, so "Lock vault" gives immediate feedback.
-            // NOTE (§4): leaving this surface does NOT lock — the unlocked session persists until an
-            // explicit lock, app background/resign-active, or the master-reauth interval.
-            if gate.phase == .locked {
-                lockedView
-            } else {
-                unlockedView
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
-        // Mirror the true biometric state every time the surface appears (no app-restart needed).
-        .task { gate.refreshBiometricState() }
-        .sheet(item: Binding(get: { regeneratedCode.map(IdentifiedCode.init) },
-                             set: { regeneratedCode = $0?.value })) { wrapped in
-            RegeneratedKitSheet(code: wrapped.value) { regeneratedCode = nil }
-        }
-    }
-
-    private var unlockedView: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "key.fill").font(.system(size: 40)).foregroundStyle(.green)
-            Text("Vault unlocked").font(.title2).bold()
-            Text("Your saved logins will appear here. The list, detail, and add/edit views arrive in the next slice.")
-                .font(.callout).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).frame(maxWidth: 420)
-
-            if gate.biometricAvailable {
-                TouchIDStatusRow(gate: gate).frame(maxWidth: 320)
-            }
-
-            Button {
-                Task { regeneratedCode = await gate.regenerateRecoveryKit() }
-            } label: { Label("Regenerate Recovery Kit", systemImage: "arrow.triangle.2.circlepath") }
-                .disabled(gate.isWorking)
-                .help("Create a new recovery code and kit. Your old recovery code stops working.")
-
-            Button { gate.lockNow() } label: { Label("Lock vault", systemImage: "lock.fill") }
-                .buttonStyle(.borderedProminent)
-                .padding(.top, 6)
-        }
-    }
-
-    private var lockedView: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "lock.fill").font(.system(size: 40)).foregroundStyle(.secondary)
-            Text("Vault locked").font(.title2).bold()
-            Text("Your vault is locked. Unlock to view your logins.")
-                .font(.callout).foregroundStyle(.secondary)
-            Button { NotificationCenter.default.post(name: .openVault, object: nil) } label: {
-                Label("Unlock", systemImage: "lock.open.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .padding(.top, 6)
-        }
-    }
-}
-
-/// Touch ID status + control on the unlocked surface, using surf-r's green/amber badge vocabulary.
-/// Reads as a toggle when usable; shows an amber "was reset" state with a re-enable action after an
-/// enrolment-change invalidation.
-private struct TouchIDStatusRow: View {
+/// Touch ID status + control, using surf-r's green/amber badge vocabulary. Reads as a toggle when
+/// usable; shows an amber "was reset" state with a re-enable action after an enrolment-change
+/// invalidation. (Slice 5: lives in the vault list's settings menu.)
+struct TouchIDStatusRow: View {
     @ObservedObject var gate: VaultGate
 
     var body: some View {
@@ -419,10 +351,10 @@ private struct TouchIDStatusRow: View {
     }
 }
 
-private struct IdentifiedCode: Identifiable { let value: String; var id: String { value } }
+struct IdentifiedCode: Identifiable { let value: String; var id: String { value } }
 
 /// Shown after "Regenerate Recovery Kit": the new code + save/print, with the old code now dead.
-private struct RegeneratedKitSheet: View {
+struct RegeneratedKitSheet: View {
     let code: String
     let onDone: () -> Void
     @State private var saveError: String?

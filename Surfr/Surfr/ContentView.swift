@@ -1408,7 +1408,7 @@ struct ActiveTabContent: View {
         case .downloads:
             DownloadsPage()   // 9c — full page; the rail keeps its popover
         case .vault:
-            VaultSurfacePlaceholder()   // F5 Slice 3 — list/detail arrive in Slice 5
+            VaultSurface()   // F5 Slice 5 — list / detail / add-edit
         case .web:
             if tab.hasNavigated {
                 WebView(webView: tab.webView)

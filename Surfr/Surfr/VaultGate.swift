@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import LocalAuthentication
 import SurfrCore
 
 /// App-level coordinator for the password vault UI. Owns the single `VaultStore` + `VaultLock`,
@@ -107,6 +108,7 @@ final class VaultGate: ObservableObject {
         biometric.disable()
         biometricInvalidated = false
         try? await store?.wipeAll()
+        items = []
         pendingMaster?.wipe(); pendingRecovery?.wipe()
         pendingMaster = nil; pendingRecovery = nil; pendingMeta = nil
         reducer = FirstRunReducer()
@@ -250,10 +252,81 @@ final class VaultGate: ObservableObject {
 
     func lockNow() {
         lock.lock()
+        items = []
         if phase == .unlocked { phase = .locked }
     }
 
     func clearError() { lastError = nil }
+
+    // MARK: - Items (Slice 5)
+
+    /// Cleartext metadata only (title/host/dates/health) — drives the list with **no decryption**.
+    @Published private(set) var items: [StoredItem] = []
+
+    /// (Re)load the list. Only the cleartext metadata is read; payloads stay encrypted on disk.
+    func loadItems() async {
+        guard let store, phase == .unlocked else { items = []; return }
+        items = (try? await store.allItems()) ?? []
+    }
+
+    /// Decrypt ONE item's payload (detail view), via the unlocked vault key. Returns nil if locked /
+    /// on failure. This is the only place a credential payload is decrypted.
+    func decryptPayload(_ item: StoredItem) -> LoginPayload? {
+        guard phase == .unlocked else { return nil }
+        return try? lock.withVaultKey { key in
+            let data = try VaultCrypto.decryptItem(item.sealed, vaultKey: key)
+            return try LoginPayload.decoded(from: data)
+        }
+    }
+
+    /// Create (id == nil) or update an item: encrypt the payload under a fresh per-item key, upsert,
+    /// and refresh the list.
+    func saveItem(id: UUID?, title: String, payload: LoginPayload, hosts: [SurfrCore.Host]) async {
+        guard let store, phase == .unlocked else { return }
+        do {
+            var data = try payload.encoded()
+            defer { data.resetBytes(in: 0..<data.count) }   // wipe the transient plaintext JSON
+            let sealed = try lock.withVaultKey { key in try VaultCrypto.encryptNewItem(data, vaultKey: key) }
+            let existing = items.first { $0.id == id }
+            let now = Date()
+            let item = StoredItem(
+                id: id ?? UUID(),
+                type: "login",
+                title: title,
+                createdAt: existing?.createdAt ?? now,
+                modifiedAt: now,
+                sealed: sealed,
+                hosts: hosts,
+                healthFlags: existing?.healthFlags ?? 0
+            )
+            try await store.upsert(item)
+            await loadItems()
+        } catch {
+            lastError = "Could not save the item."
+        }
+    }
+
+    func deleteItem(_ id: UUID) async {
+        guard let store else { return }
+        try? await store.deleteItem(id: id)
+        await loadItems()
+    }
+
+    /// Biometric gate for revealing/copying a password (WF-5). If biometric isn't enabled, the vault
+    /// is already unlocked so reveal proceeds (`true`). If enabled, require a fresh Touch ID via
+    /// `LAContext.evaluatePolicy` — the reliable LA path (not the SE decrypt). **A cancel returns
+    /// `false`**, so the caller simply stays masked: a no-op, never an error.
+    func authenticateForReveal() async -> Bool {
+        guard biometricState == .enabled else { return true }
+        let context = LAContext()
+        context.localizedCancelTitle = "Cancel"
+        return await withCheckedContinuation { cont in
+            context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
+                                   localizedReason: "Reveal your password") { ok, _ in
+                cont.resume(returning: ok)
+            }
+        }
+    }
 
     // MARK: - Biometric door (Slice 4)
 

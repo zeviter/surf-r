@@ -16,7 +16,7 @@ public struct Host: Equatable, Sendable {
 /// A row-ready vault item: cleartext **metadata** (title/hosts/dates) plus the encrypted `SealedItem`.
 /// The store reads and writes only this — it never holds a decrypted credential payload. Decryption is
 /// the caller's job via `VaultCrypto.decryptItem`.
-public struct StoredItem: Equatable, Sendable {
+public struct StoredItem: Equatable, Sendable, Identifiable {
     public var id: UUID
     public var type: String            // "login" (default) · "passkey" (reserved) · …
     public var title: String           // cleartext metadata (see vault-spec §13 disclosure)
