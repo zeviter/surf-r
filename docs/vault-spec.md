@@ -221,6 +221,12 @@ path — **no schema migration** needed when passkeys land.
 > TOTP) live only inside the encrypted `ciphertext` and never touch a cleartext column. The privacy cost
 > of the cleartext metadata is disclosed in §13.
 
+> **Slice 5 — list needs no decryption (intentional privacy property).** Because `title`/`host` are
+> cleartext metadata, the vault **list renders without decrypting anything** — only the **detail view
+> decrypts, one item at a time, on open** (and zeroes that plaintext on close). So at most one
+> credential's payload is ever in cleartext in memory, briefly. This is the deliberate upside of the
+> cleartext-metadata tradeoff in §13: minimal plaintext exposure, and the list/search stay fast.
+
 **Login payload (decrypted shape — cleartext only in memory, only while unlocked):**
 ```json
 { "username": "...", "password": "...", "notes": "...",
@@ -353,6 +359,7 @@ unit-tested cores; UI follows; the Apple-gated extension lands last in v1.
 | 3 | Master-pw unlock + Recovery Kit | First-run set-master, master unlock UI, mandatory Recovery Kit PDF. Verify recovery resets a "forgotten" master. | med |
 | 4 | Biometric unlock | SE-wrapped copy, `LAContext`, `.biometryCurrentSet`. **Hardware-tested** (no SE in Simulator). | med |
 | 5 | Vault list · detail · add/edit | The `PageScaffold` surfaces (WF-4/5/6). Favicons via existing service. | med |
+| 5b | **CSV import** (next, before Generator) | Import LastPass / 1Password / Bitwarden / browser CSV exports. Column-mapping layer → bulk encrypt-and-store via the Slice 5 item API. **Plaintext-file discipline:** parse offline, never cache/log the CSV, prompt the user to delete the file after. LastPass CSVs omit TOTP seeds → flag those items for manual re-add in Slice 7. | med |
 | 6 | Generator | Random + passphrase, entropy readout, inline + standalone (WF-6). | low |
 | 7 | TOTP | otpauth import (paste + QR), RFC 6238, countdown UI. | low |
 | 8 | In-browser fill + save | `WKUserScript` field detection, inline suggestion (WF-7), own save prompt (WF-8). | med |

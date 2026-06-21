@@ -18,6 +18,11 @@
   normalisation partially done via the Safari UA fix.) Not started.
 - ☐ **Password manager — vault (F5).** Encrypted local store (CryptoKit + Keychain + Secure
   Enclave), password generator, TOTP, Face/Touch ID gate. Not started.
+- ☐ **Password manager — CSV import (F5, vault Slice 5b — next).** Import LastPass / 1Password /
+  Bitwarden / browser CSV exports via a column-mapping layer, bulk encrypt-and-store through the
+  Slice 5 item API. Plaintext-file discipline: parse **offline**, never cache or log the CSV, and
+  prompt the user to delete the file afterward. LastPass exports omit TOTP seeds → flag those for
+  manual re-add in Slice 7. See `vault-spec.md` §11.
 - ☐ **Password manager — system autofill (F5).** `ASCredentialProviderExtension` (+ passkeys) so
   credentials fill across all apps. Not started.
 - ☐ **Cross-device sync (F5/F6/F8).** CloudKit private DB, end-to-end encrypted, for vault +
