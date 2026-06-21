@@ -173,6 +173,10 @@ printout. So the UI must (a) generate the code at high entropy, (b) make creatin
 it into the vault or iCloud. There is **no server backstop**: lose both the master password and the
 kit, and the vault is unrecoverable by design.
 
+> **Slice 4 as-built (recovery robustness).**
+> - **Copy-safe code.** The recovery code is KDF'd against a **canonical form** (`VaultCrypto.canonicalRecoveryCode`: uppercase, Crockford look-alike mapping `O→0`/`I,L→1`, and *all* separators/whitespace stripped), so a code copied without a hyphen, in the wrong case, or with stray whitespace still unlocks. The kit PDF + on-screen code render on a **single line** so a copy keeps every separator. The entry field disables smart-dash/quote/replacement substitutions.
+> - **Regenerate Recovery Kit** (authenticated, in-vault). A lost/compromised kit can be replaced: re-wrap **copy 2** of the vault key under a fresh code (`rewrapForNewRecovery`), persist, and produce a new kit PDF. The **old code stops working**; the master door is untouched.
+
 ---
 
 ## 6. Storage model &amp; schema
