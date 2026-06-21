@@ -61,13 +61,11 @@ private struct FirstRunMasterView: View {
             VaultHeader(title: "Create your vault",
                         subtitle: "Your master password is the root of trust. Pick a passphrase of 6+ words — long is stronger than complicated.")
 
-            SecureField("Master password", text: $password)
-                .textFieldStyle(.roundedBorder)
+            VaultPasswordField(placeholder: "Master password", text: $password, autoFocus: true)
             if !password.isEmpty { PasswordStrengthMeter(strength: strength) }
 
-            SecureField("Confirm master password", text: $confirm)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { if canContinue { Task { await gate.submitMaster(password) } } }
+            VaultPasswordField(placeholder: "Confirm master password", text: $confirm,
+                               onSubmit: { if canContinue { Task { await gate.submitMaster(password) } } })
             if mismatch {
                 Text("Passwords don't match.").font(.caption).foregroundStyle(.red)
             }
@@ -110,6 +108,8 @@ private struct RecoveryKitStepView: View {
                 Text("RECOVERY CODE").font(.caption).bold().foregroundStyle(.secondary)
                 Text(gate.recoveryCodeForDisplay)
                     .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)                      // single line so a copy keeps every hyphen
+                    .minimumScaleFactor(0.6)
                     .textSelection(.enabled)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -138,7 +138,7 @@ private struct RecoveryKitStepView: View {
             }
 
             Toggle("I’ve saved my Recovery Kit somewhere safe", isOn: $acknowledged)
-                .toggleStyle(.checkbox)                               // visible outlined checkbox at rest
+                .toggleStyle(OutlinedCheckboxToggleStyle())          // visible outlined checkbox at rest
                 .disabled(!savedOrPrinted)
                 .font(.callout)
             if !savedOrPrinted {
@@ -147,7 +147,7 @@ private struct RecoveryKitStepView: View {
 
             if gate.biometricAvailable {
                 Toggle("Enable Touch ID for faster unlock", isOn: $enableBiometric)
-                    .toggleStyle(.checkbox)
+                    .toggleStyle(OutlinedCheckboxToggleStyle())
                     .font(.callout)
             }
 
@@ -186,9 +186,8 @@ private struct UnlockView: View {
             VStack(alignment: .leading, spacing: 14) {
                 VaultHeader(title: "Unlock vault", subtitle: nil)
 
-                SecureField("Master password", text: $password)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { attempt() }
+                VaultPasswordField(placeholder: "Master password", text: $password,
+                                   autoFocus: true, onSubmit: attempt)
 
                 if gate.shouldOfferBiometric {
                     Button { tryBiometric() } label: {
@@ -250,10 +249,10 @@ private struct RecoveryResetView: View {
             VaultHeader(title: "Reset master password",
                         subtitle: "Enter your recovery code, then choose a new master password.")
 
-            TextField("Recovery code", text: $code).textFieldStyle(.roundedBorder)
-            SecureField("New master password", text: $newMaster).textFieldStyle(.roundedBorder)
+            VaultPlainField(placeholder: "Recovery code", text: $code, autoFocus: true)
+            VaultPasswordField(placeholder: "New master password", text: $newMaster)
             if !newMaster.isEmpty { PasswordStrengthMeter(strength: strength) }
-            SecureField("Confirm new master password", text: $confirm).textFieldStyle(.roundedBorder)
+            VaultPasswordField(placeholder: "Confirm new master password", text: $confirm)
 
             if let error = gate.lastError {
                 Text(error).font(.caption).foregroundStyle(.red)
@@ -299,6 +298,7 @@ private struct VaultHeader: View {
 /// verifiable end-to-end; Slice 5 replaces it with the `PageScaffold` list/detail/add-edit.
 struct VaultSurfacePlaceholder: View {
     @EnvironmentObject private var gate: VaultGate
+    @State private var regeneratedCode: String?
 
     var body: some View {
         Group {
@@ -313,6 +313,12 @@ struct VaultSurfacePlaceholder: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .textBackgroundColor))
+        // Mirror the true biometric state every time the surface appears (no app-restart needed).
+        .task { gate.refreshBiometricState() }
+        .sheet(item: Binding(get: { regeneratedCode.map(IdentifiedCode.init) },
+                             set: { regeneratedCode = $0?.value })) { wrapped in
+            RegeneratedKitSheet(code: wrapped.value) { regeneratedCode = nil }
+        }
     }
 
     private var unlockedView: some View {
@@ -326,6 +332,12 @@ struct VaultSurfacePlaceholder: View {
             if gate.biometricAvailable {
                 TouchIDStatusRow(gate: gate).frame(maxWidth: 320)
             }
+
+            Button {
+                Task { regeneratedCode = await gate.regenerateRecoveryKit() }
+            } label: { Label("Regenerate Recovery Kit", systemImage: "arrow.triangle.2.circlepath") }
+                .disabled(gate.isWorking)
+                .help("Create a new recovery code and kit. Your old recovery code stops working.")
 
             Button { gate.lockNow() } label: { Label("Lock vault", systemImage: "lock.fill") }
                 .buttonStyle(.borderedProminent)
@@ -378,6 +390,44 @@ private struct TouchIDStatusRow: View {
             }
             .toggleStyle(.switch)
         }
+    }
+}
+
+private struct IdentifiedCode: Identifiable { let value: String; var id: String { value } }
+
+/// Shown after "Regenerate Recovery Kit": the new code + save/print, with the old code now dead.
+private struct RegeneratedKitSheet: View {
+    let code: String
+    let onDone: () -> Void
+    @State private var saveError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("New Recovery Kit").font(.title3).bold()
+            Text("Your previous recovery code no longer works. Save or print this new kit and store it offline.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+
+            Text(code)
+                .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                .lineLimit(1).minimumScaleFactor(0.6).textSelection(.enabled)
+                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.gray.opacity(0.12)))
+
+            HStack {
+                Button {
+                    let data = RecoveryKit.makePDF(code: code, createdAt: Date())
+                    if case .failed(let m) = RecoveryKit.presentSavePanel(data: data) { saveError = m } else { saveError = nil }
+                } label: { Label("Save PDF…", systemImage: "square.and.arrow.down") }
+                Button { RecoveryKit.print(code: code, createdAt: Date()) } label: { Label("Print…", systemImage: "printer") }
+            }
+            if let saveError {
+                Text("Couldn’t save the kit (\(saveError)). Try a different location.")
+                    .font(.caption).foregroundStyle(.red)
+            }
+
+            HStack { Spacer(); Button("Done", action: onDone).keyboardShortcut(.defaultAction) }
+        }
+        .padding(22).frame(width: 460)
     }
 }
 

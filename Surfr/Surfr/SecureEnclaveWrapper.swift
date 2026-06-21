@@ -58,7 +58,11 @@ final class SecureEnclaveWrapper: VaultKeyWrapper, @unchecked Sendable {
 
         var error: Unmanaged<CFError>?
         guard let plain = SecKeyCreateDecryptedData(privateKey, algorithm, wrapped as CFData, &error) else {
-            throw Failure.decryptFailed(Self.describe(error))   // wrong biometric / cancelled / invalidated
+            // Preserve the ORIGINAL error (domain/code/underlying) so the caller can tell a user
+            // cancel (Code=-2) apart from a genuine .biometryCurrentSet invalidation (AKSError
+            // -536362999). Stringifying here is what previously hid the cancel.
+            if let cfError = error?.takeRetainedValue() { throw cfError as Error }
+            throw Failure.decryptFailed("unknown")
         }
         var bytes = plain as Data
         defer { bytes.resetBytes(in: 0..<bytes.count) }

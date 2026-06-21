@@ -159,6 +159,44 @@ final class VaultCryptoTests: XCTestCase {
         XCTAssertNotEqual(code, VaultCrypto.generateRecoveryCode())
     }
 
+    // 11a — Recovery code canonicalization: format/transcription variations of the SAME code unlock.
+    func test_recoveryCode_canonicalization_toleratesFormatting() throws {
+        let code = VaultCrypto.generateRecoveryCode()          // e.g. "BXGES-VM6ZS-…"
+        let created = try VaultCrypto.createVault(masterPassword: "m", recoveryCode: code, params: Self.fastParams)
+
+        // Variants a careless copy/paste or retype might produce — all must still unlock.
+        let variants = [
+            code,                                              // exact
+            code.replacingOccurrences(of: "-", with: ""),      // hyphens dropped at a PDF line-wrap
+            code.lowercased(),                                 // case lost
+            "  \(code)\n",                                     // stray whitespace/newline
+            code.replacingOccurrences(of: "-", with: " "),     // hyphens became spaces
+        ]
+        for v in variants {
+            let key = try VaultCrypto.unlockWithRecovery(v, meta: created.meta)
+            XCTAssertEqual(rawBytes(key), rawBytes(created.vaultKey), "variant failed to unlock: \(v)")
+        }
+
+        // Crockford look-alike mapping is applied (O→0, I/L→1; hyphens/spaces dropped).
+        XCTAssertEqual(VaultCrypto.canonicalRecoveryCode("o0-Il L"), "00111")
+    }
+
+    // 11b — Regenerate Recovery Kit: a fresh recovery code re-wraps copy 2; old code dies, master intact.
+    func test_rewrapForNewRecovery() throws {
+        let oldCode = VaultCrypto.generateRecoveryCode()
+        let v = try VaultCrypto.createVault(masterPassword: "master", recoveryCode: oldCode, params: Self.fastParams)
+
+        let newCode = VaultCrypto.generateRecoveryCode()
+        let newMeta = try VaultCrypto.rewrapForNewRecovery(vaultKey: v.vaultKey, newRecoveryCode: newCode,
+                                                           meta: v.meta, params: Self.fastParams)
+
+        XCTAssertThrowsError(try VaultCrypto.unlockWithRecovery(oldCode, meta: newMeta), "old code must stop working")
+        XCTAssertEqual(rawBytes(try VaultCrypto.unlockWithRecovery(newCode, meta: newMeta)), rawBytes(v.vaultKey))
+        // Master door untouched.
+        XCTAssertEqual(newMeta.wrappedVaultKeyMaster, v.meta.wrappedVaultKeyMaster)
+        XCTAssertEqual(rawBytes(try VaultCrypto.unlockWithMaster("master", meta: newMeta)), rawBytes(v.vaultKey))
+    }
+
     // 11 — No-plaintext-logging guard: the crypto layer must not log.
     func test_cryptoLayer_hasNoLoggingCalls() throws {
         let here = URL(fileURLWithPath: #filePath)                       // …/Tests/SurfrCoreTests/VaultCryptoTests.swift

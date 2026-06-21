@@ -130,6 +130,32 @@ final class BiometricFallbackTests: XCTestCase {
         XCTAssertEqual(mock.unlockCount, 0)
     }
 
+    func test_regenerateRecoveryKit_oldCodeDies_newWorks() async throws {
+        let mock = MockBiometricUnlock()
+        let gate = newGate(mock)
+        await gate.load()
+        gate.beginFirstRun()
+        await gate.submitMaster(master)
+        let oldCode = gate.recoveryCodeForDisplay              // captured before commit clears it
+        await gate.acknowledgeKit(enableBiometric: false)
+        XCTAssertEqual(gate.phase, .unlocked)
+
+        let newCode = await gate.regenerateRecoveryKit()
+        let unwrappedNew = try XCTUnwrap(newCode)
+        XCTAssertNotEqual(unwrappedNew, oldCode)
+
+        // Old recovery code no longer resets the master; the new one does (and a copy-mangled form too).
+        gate.lockNow()
+        let oldReset = await gate.resetWithRecovery(code: oldCode, newMaster: "brand new master phrase here")
+        XCTAssertFalse(oldReset, "old recovery code must stop working after regeneration")
+
+        gate.lockNow()
+        let mangled = unwrappedNew.replacingOccurrences(of: "-", with: "").lowercased()   // copy dropped hyphens + case
+        let newReset = await gate.resetWithRecovery(code: mangled, newMaster: "brand new master phrase here")
+        XCTAssertTrue(newReset, "new recovery code must work even when copy-mangled")
+        XCTAssertEqual(gate.phase, .unlocked)
+    }
+
     func test_masterRequiredInterval_skipsBiometric() async throws {
         // Fixed clock; force last master auth to be older than the 14-day interval.
         let nowDate = Date(timeIntervalSince1970: 2_000_000_000)

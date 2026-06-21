@@ -239,6 +239,36 @@ final class VaultGate: ObservableObject {
         needsBiometricReenroll = false
     }
 
+    /// Re-read live biometric availability/enabled state so a surface always mirrors the truth (e.g.
+    /// after an invalidation→master-login, the affordance updates without an app restart).
+    func refreshBiometricState() {
+        biometricAvailable = biometric.isAvailable
+        biometricEnabled = biometric.isEnabled
+    }
+
+    /// Regenerate the Recovery Kit (authenticated): mint a fresh recovery code, re-wrap **copy 2** of
+    /// the vault key under it (old code stops working), persist, and return the new code for the kit
+    /// PDF. Requires the vault to be unlocked. Returns nil on failure.
+    func regenerateRecoveryKit() async -> String? {
+        guard phase == .unlocked, let store else { return nil }
+        isWorking = true; lastError = nil
+        defer { isWorking = false }
+        guard let meta = try? await store.loadMeta() else { lastError = "No vault found."; return nil }
+        let newCode = VaultCrypto.generateRecoveryCode()
+        do {
+            // Re-wrap with the live key (never leaves the lock's closure); deliberate, rare action.
+            let newMeta = try lock.withVaultKey { key in
+                try VaultCrypto.rewrapForNewRecovery(vaultKey: key, newRecoveryCode: newCode, meta: meta)
+            }
+            try await store.saveMeta(newMeta)
+            vaultLog("recovery kit regenerated (copy 2 re-wrapped; old code invalidated)")
+            return newCode
+        } catch {
+            lastError = "Could not regenerate the Recovery Kit."
+            return nil
+        }
+    }
+
     /// Attempt a biometric unlock. Returns true on success; on any failure returns false and leaves the
     /// master field as the fallback. An enrolment-change invalidation disables biometric and flags a
     /// re-enroll; a user cancel changes nothing.

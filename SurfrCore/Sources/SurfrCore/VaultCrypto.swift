@@ -215,7 +215,7 @@ public enum VaultCrypto {
         let saltRecovery = newSalt()
 
         let kekMaster = try deriveKEK(password: masterPassword, salt: saltMaster, params: params)
-        let kekRecovery = try deriveKEK(password: recoveryCode, salt: saltRecovery, params: params)
+        let kekRecovery = try deriveKEK(password: canonicalRecoveryCode(recoveryCode), salt: saltRecovery, params: params)
 
         let meta = VaultMeta(
             schemaVersion: currentSchemaVersion,
@@ -233,10 +233,29 @@ public enum VaultCrypto {
         return try unwrapVaultKey(meta.wrappedVaultKeyMaster, with: kek)
     }
 
-    /// Door 2 — recovery code unlock (used to reset a lost master). Throws on a wrong code.
+    /// Door 2 — recovery code unlock (used to reset a lost master). Throws on a wrong code. The code is
+    /// canonicalized first (see `canonicalRecoveryCode`), so formatting/transcription variations match.
     public static func unlockWithRecovery(_ code: String, meta: VaultMeta) throws -> SymmetricKey {
-        let kek = try deriveKEK(password: code, salt: meta.kdfSaltRecovery, params: meta.kdfParamsRecovery)
+        let kek = try deriveKEK(password: canonicalRecoveryCode(code), salt: meta.kdfSaltRecovery, params: meta.kdfParamsRecovery)
         return try unwrapVaultKey(meta.wrappedVaultKeyRecovery, with: kek)
+    }
+
+    /// Re-wrap **only copy 2** (the recovery door) with a fresh code + salt — the "regenerate Recovery
+    /// Kit" path. The master copy is untouched; the old recovery code stops working. Requires the
+    /// already-unlocked vault key.
+    public static func rewrapForNewRecovery(vaultKey: SymmetricKey,
+                                            newRecoveryCode: String,
+                                            meta: VaultMeta,
+                                            params: KDFParams? = nil) throws -> VaultMeta {
+        let effectiveParams = params ?? meta.kdfParamsRecovery
+        let salt = newSalt()
+        let kek = try deriveKEK(password: canonicalRecoveryCode(newRecoveryCode), salt: salt, params: effectiveParams)
+
+        var updated = meta
+        updated.kdfSaltRecovery = salt
+        updated.kdfParamsRecovery = effectiveParams
+        updated.wrappedVaultKeyRecovery = try wrapVaultKey(vaultKey, with: kek)
+        return updated
     }
 
     /// Master-password change: re-wrap **only copy 1** (fresh salt + KEK from the new password). The
@@ -270,6 +289,27 @@ public enum VaultCrypto {
     /// Crockford base-32 alphabet (omits `I L O U` to avoid transcription ambiguity). 32 symbols → a
     /// clean 5 bits per character.
     private static let recoveryAlphabet = Array("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
+
+    /// Canonical form a recovery code is KDF'd against, so display/transcription differences don't
+    /// break unlock: uppercase, map the Crockford look-alikes (`O→0`, `I/L→1`), and keep **only**
+    /// alphabet symbols (dropping hyphens, spaces, newlines, smart-dashes — anything else). Both
+    /// generation and unlock derive the KEK from this form, so a code copied without a hyphen, in a
+    /// different case, or with stray whitespace still matches.
+    public static func canonicalRecoveryCode(_ s: String) -> String {
+        let allowed = Set(recoveryAlphabet)
+        var out = ""
+        out.reserveCapacity(s.count)
+        for raw in s.uppercased() {
+            let mapped: Character
+            switch raw {
+            case "O": mapped = "0"
+            case "I", "L": mapped = "1"
+            default: mapped = raw
+            }
+            if allowed.contains(mapped) { out.append(mapped) }
+        }
+        return out
+    }
 
     /// A high-entropy printable recovery code, e.g. `A1B2C-…` in `groups` of `groupSize`. Default
     /// 7×5 = 35 chars × 5 bits ≈ **175 bits**. CSPRNG-sourced; intended for the printed Recovery Kit.

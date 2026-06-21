@@ -24,7 +24,9 @@ struct RecoveryKitDocument: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("RECOVERY CODE").font(.caption).bold().foregroundStyle(.secondary)
                 Text(code)
-                    .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)                       // single line → copied text keeps every hyphen
+                    .minimumScaleFactor(0.5)
                     .textSelection(.enabled)
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)

@@ -70,23 +70,31 @@ final class SecureEnclaveBiometricUnlock: BiometricUnlocking, @unchecked Sendabl
         }.value
     }
 
-    /// Map an SE/LA error to a gate outcome. Only a user **cancel** leaves biometric untouched, and a
-    /// **lockout** is a transient "try again later"; **every other** failure of a stored biometric key
-    /// means the key is no longer usable (the `.biometryCurrentSet` enrolment change invalidated it),
-    /// so it's reported as `.invalidated` on the **first** failure — the gate then disables it and
-    /// shows the reset message immediately, rather than lagging a retry behind.
+    /// Map an SE/LA error to a gate outcome. A user **cancel** must leave biometric untouched (no-op,
+    /// master fallback); a **lockout** is a transient "try again later"; **every other** failure of a
+    /// stored biometric key means it's no longer usable (the `.biometryCurrentSet` enrolment change
+    /// invalidated it → "unable to compute shared secret"), so it's `.invalidated` on the first failure.
     static func classify(_ error: Error) -> BiometricFailure {
+        if isUserCancel(error) { return .userCancelled }
+        if let laError = error as? LAError, laError.code == .biometryLockout { return .failed }
+        return .invalidated
+    }
+
+    /// Detect a user/system cancel across the shapes it arrives in: an `LAError` cancel, a raw
+    /// `Code=-2` (`LAError.userCancel`) or `errSecUserCanceled` (-128) in any domain, or one nested
+    /// under `NSUnderlyingErrorKey`. This is what keeps dismissing the Touch ID prompt from being
+    /// misread as an enrolment-change invalidation.
+    static func isUserCancel(_ error: Error) -> Bool {
         if let laError = error as? LAError {
             switch laError.code {
-            case .userCancel, .appCancel, .systemCancel: return .userCancelled
-            case .biometryLockout:                       return .failed        // transient; don't disable
-            default:                                     return .invalidated   // not-available/not-enrolled/auth-fail with a stored key
+            case .userCancel, .appCancel, .systemCancel: return true
+            default: break
             }
         }
         let ns = error as NSError
-        if ns.code == errSecUserCanceled { return .userCancelled }
-        // Any non-cancel Secure-Enclave / key failure on a key we hold → the stored key is unusable.
-        return .invalidated
+        if ns.code == LAError.userCancel.rawValue || ns.code == Int(errSecUserCanceled) { return true }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError { return isUserCancel(underlying) }
+        return false
     }
 
     // MARK: - Keychain blob storage (data-protection keychain, our access group, ThisDeviceOnly)
