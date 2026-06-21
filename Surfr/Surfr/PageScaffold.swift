@@ -79,41 +79,45 @@ struct PageRow<Trailing: View>: View {
 
     @ObservedObject private var trustStore = TrustStore.shared
     private var trusted: Bool { trustStore.isTrusted(host: host) }
+    @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 10) {
-            FaviconView(host: host, size: 28, cornerRadius: 6)
-                .overlay(alignment: .topTrailing) {
-                    if trusted { TrustedBadge().offset(x: 4, y: -4) }
+            // The whole favicon + text + meta region is one full-width/height tap target — clicking
+            // anywhere on the row opens it (the trailing controls stay separate).
+            HStack(spacing: 10) {
+                FaviconView(host: host, size: 28, cornerRadius: 6)
+                    .overlay(alignment: .topTrailing) {
+                        if trusted { TrustedBadge().offset(x: 4, y: -4) }
+                    }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(primary.isEmpty ? host : primary).lineLimit(1)
+                    if let secondary, !secondary.isEmpty {
+                        Text(secondary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(primary.isEmpty ? host : primary).lineLimit(1)
-                if let secondary, !secondary.isEmpty {
-                    Text(secondary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                if let trailingMeta {
+                    Text(trailingMeta).font(.caption).foregroundStyle(.secondary).fixedSize()
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .onTapGesture(perform: onOpen)
 
-            if let trailingMeta {
-                Text(trailingMeta)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize()
-            }
             trailing()
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(trusted ? Color.green.opacity(0.08) : Color.clear)
+                .fill(trusted ? Color.green.opacity(0.08)
+                              : (hovering ? Color.primary.opacity(0.06) : Color.clear))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .strokeBorder(trusted ? Color.green.opacity(0.5) : Color.clear, lineWidth: 1)
         )
+        .onHover { hovering = $0 }
     }
 }
 

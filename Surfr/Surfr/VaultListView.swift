@@ -128,21 +128,38 @@ struct VaultListView: View {
     /// Visible, stateful security controls (per review): Touch ID status/toggle in the green/amber
     /// vocabulary, Regenerate Recovery Kit, and Lock — never hidden behind a ••• menu.
     private var securityBar: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 16) {
             if gate.biometricAvailable {
-                TouchIDStatusRow(gate: gate).frame(maxWidth: 240)
+                TouchIDStatusRow(gate: gate)
             }
-            Toggle("Require auth to reveal", isOn: $gate.requireAuthToReveal)
-                .toggleStyle(.checkbox)
-                .help("Require Touch ID or your master password before revealing/copying a password")
+            // Same control kind as Touch ID: a switch with a state-coloured leading icon.
+            Toggle(isOn: $gate.requireAuthToReveal) {
+                HStack(spacing: 6) {
+                    Image(systemName: "lock.shield.fill")
+                        .foregroundStyle(gate.requireAuthToReveal ? .green : .secondary)
+                    Text("Require auth to reveal/copy")
+                }
+            }
+            .toggleStyle(.switch).tint(.green)
+            .help("Require Touch ID or your master password before revealing or copying a password")
+
             Spacer()
+
             Button {
                 Task { regeneratedCode = await gate.regenerateRecoveryKit() }
-            } label: { Label("Recovery Kit", systemImage: "arrow.triangle.2.circlepath") }
-                .help("Regenerate the Recovery Kit — your old recovery code stops working")
+            } label: { Label("Regenerate Recovery Key", systemImage: "arrow.triangle.2.circlepath") }
+                .help("Generate a new recovery code (and Recovery Kit) — your old code stops working")
                 .disabled(gate.isWorking)
-            Button { gate.lockNow() } label: { Label("Lock", systemImage: "lock.fill") }
-                .buttonStyle(.borderedProminent)
+
+            // State-aware lock control (the list only shows while unlocked, but keep it honest).
+            Button {
+                if gate.phase == .unlocked { gate.lockNow() }
+                else { NotificationCenter.default.post(name: .openVault, object: nil) }
+            } label: {
+                Label(gate.phase == .unlocked ? "Lock Vault" : "Unlock Vault",
+                      systemImage: gate.phase == .unlocked ? "lock.fill" : "lock.open.fill")
+            }
+            .buttonStyle(.borderedProminent)
         }
         .padding(.horizontal, 20).padding(.vertical, 8)
     }

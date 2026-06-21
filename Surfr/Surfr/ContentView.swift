@@ -322,6 +322,12 @@ final class BrowserState: ObservableObject {
         surfaceReturnTarget = cameFrom   // where to return when this surface is toggled closed
     }
 
+    /// Eject the active internal surface if one is showing (e.g. after a vault reset) — back to the
+    /// previous tab / new-tab, reusing the toggle-restore exit. No-op on a web tab.
+    func dismissActiveSurface() {
+        if activeTab.kind != .web { closeActiveSurfaceReturning() }
+    }
+
     /// Close the active internal surface and return to the remembered tab if it still exists, else any
     /// web tab, else a fresh new-tab page — never a dead-end. Switching away makes the (ephemeral)
     /// surface auto-discard via `handleActiveChange`.
@@ -1618,7 +1624,10 @@ struct ContentView: View {
         .confirmationDialog("Erase the entire vault?", isPresented: $showResetConfirm, titleVisibility: .visible) {
             Button("Erase Vault", role: .destructive) {
                 showVault = false
-                Task { await vault.resetVault() }
+                Task {
+                    await vault.resetVault()
+                    browser.dismissActiveSurface()   // eject the wiped vault surface (no stale state)
+                }
             }
             Button("Cancel", role: .cancel) { }
         } message: {
@@ -1794,6 +1803,10 @@ struct ContentView: View {
 
     /// Dismiss the vault gate overlay; if a successful unlock just happened, open the vault surface.
     private func closeVault() {
+        // Idempotent: the unlock success path and the overlay's `.unlocked` auto-dismiss can both call
+        // this. Without the guard, `openVaultPage()` runs twice and the second call toggles the
+        // just-opened vault shut — the "first open kicks me out" bug.
+        guard showVault else { return }
         showVault = false
         if vault.isUnlocked { browser.openVaultPage() }
     }

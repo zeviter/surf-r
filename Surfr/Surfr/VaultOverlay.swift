@@ -338,15 +338,14 @@ struct TouchIDStatusRow: View {
                 set: { $0 ? gate.enableBiometric() : gate.disableBiometric() }
             )) {
                 HStack(spacing: 6) {
-                    Image(systemName: gate.biometricEnabled ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(gate.biometricEnabled ? .green : .secondary)
+                    // Green fingerprint when on, neutral when off (the rail's green-when-active
+                    // vocabulary; neutral rather than literal white so it's visible on the light bar).
+                    Image(systemName: "touchid").foregroundStyle(gate.biometricEnabled ? .green : .secondary)
                     Text("Touch ID")
-                    Text(gate.biometricEnabled ? "On" : "Off")
-                        .font(.caption).foregroundStyle(gate.biometricEnabled ? .green : .secondary)
                 }
             }
             .toggleStyle(.switch)
-            .tint(.green)               // unmistakable on-state fill
+            .tint(.green)
         }
     }
 }
