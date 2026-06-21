@@ -245,6 +245,9 @@ final class BrowserState: ObservableObject {
     private var trustBinding: AnyCancellable?
     /// Per-tab URL subscriptions, so we can react when a pristine tab navigates.
     private var tabURLBindings: [Tab.ID: AnyCancellable] = [:]
+    /// The tab to return to when an internal surface is toggled closed (re-pressing its open
+    /// shortcut). Set when an internal surface is opened; honoured on toggle-close.
+    private var surfaceReturnTarget: Tab.ID?
     /// Monotonic activation counter; assigned to each tab as it becomes active
     /// (drives the representative tab, NOT the rail's tile order).
     private var activationCounter = 0
@@ -297,10 +300,17 @@ final class BrowserState: ObservableObject {
     /// first-run/unlock before this is called.
     func openVaultPage() { openInternalPage(.vault, title: "Vault") }
 
-    /// Open an internal-page surface: if one of this kind is already open, switch to
-    /// it (no duplicate); otherwise create it. It's a host-less page — not in the
-    /// rail favicon stack and not discarded as pristine.
+    /// Open an internal-page surface — or, if already on it, **toggle it closed** and return to the
+    /// previously-active tab. One general rule for every internal surface (vault/history/downloads/
+    /// trusted/shortcuts): the same open-shortcut opens and closes. Single-instance: switches to an
+    /// existing instance rather than duplicating. Never dead-ends — see `closeActiveSurfaceReturning`.
     func openInternalPage(_ kind: Tab.Kind, title: String) {
+        // Toggle: re-pressing while already on this surface closes it and restores the prior tab.
+        if activeTab.kind == kind {
+            closeActiveSurfaceReturning()
+            return
+        }
+        let cameFrom = activeTabID
         if let existing = tabs.first(where: { $0.kind == kind }) {
             activeTabID = existing.id
         } else {
@@ -309,6 +319,25 @@ final class BrowserState: ObservableObject {
             wire(tab)
             activeTabID = tab.id
         }
+        surfaceReturnTarget = cameFrom   // where to return when this surface is toggled closed
+    }
+
+    /// Close the active internal surface and return to the remembered tab if it still exists, else any
+    /// web tab, else a fresh new-tab page — never a dead-end. Switching away makes the (ephemeral)
+    /// surface auto-discard via `handleActiveChange`.
+    private func closeActiveSurfaceReturning() {
+        let surface = activeTabID
+        if let target = surfaceReturnTarget, target != surface, tabs.contains(where: { $0.id == target }) {
+            activeTabID = target
+        } else if let anyWeb = tabs.first(where: { $0.kind == .web && $0.id != surface }) {
+            activeTabID = anyWeb.id
+        } else {
+            let tab = Tab()
+            tabs.append(tab)
+            wire(tab)
+            activeTabID = tab.id
+        }
+        surfaceReturnTarget = nil
     }
 
     /// Navigate the active tab to `url` (Enter from the omnibox). A web tab loads in
@@ -1685,19 +1714,32 @@ struct ContentView: View {
     private func installMouseNavMonitor() {
         guard mouseNavMonitor == nil else { return }
         mouseNavMonitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseUp, .keyDown]) { event in
-            let webView = browser.activeTab.webView
+            let tab = browser.activeTab
+            let webView = tab.webView
+            // On an internal surface (vault/history/…) the same back/forward gestures drive the
+            // surface's own navigation via .goBack/.goForward (observed by the surface), so ⌘[ /
+            // swipe / side-button work there too — not just web pages.
+            let isInternal = tab.kind != .web
             if event.type == .keyDown {
                 // Plain ⌘ + bracket only (⌘⇧[ etc. are left alone).
                 guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
                       let ch = event.charactersIgnoringModifiers else { return event }
-                if ch == "[", webView.canGoBack { webView.goBack(); return nil }
-                if ch == "]", webView.canGoForward { webView.goForward(); return nil }
+                if ch == "[" {
+                    if isInternal { NotificationCenter.default.post(name: .goBack, object: nil); return nil }
+                    if webView.canGoBack { webView.goBack(); return nil }
+                }
+                if ch == "]" {
+                    if isInternal { NotificationCenter.default.post(name: .goForward, object: nil); return nil }
+                    if webView.canGoForward { webView.goForward(); return nil }
+                }
                 return event
             }
             switch event.buttonNumber {
             case 3:
+                if isInternal { NotificationCenter.default.post(name: .goBack, object: nil); return nil }
                 if webView.canGoBack { webView.goBack(); return nil }
             case 4:
+                if isInternal { NotificationCenter.default.post(name: .goForward, object: nil); return nil }
                 if webView.canGoForward { webView.goForward(); return nil }
             default:
                 break

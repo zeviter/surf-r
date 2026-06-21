@@ -179,6 +179,7 @@ final class VaultGate: ObservableObject {
             wipePending()
             recordMasterAuth()
             phase = .unlocked
+            await loadItems()
             // First-run "enable biometric" (WF-2 step 2): wrap the now-resident key to the SE.
             if enableBiometric, biometricAvailable { self.enableBiometric() }
         } catch {
@@ -220,6 +221,7 @@ final class VaultGate: ObservableObject {
             }.value
             recordMasterAuth()
             phase = .unlocked
+            await loadItems()
             return true
         } catch {
             lastError = "Incorrect master password."
@@ -243,6 +245,7 @@ final class VaultGate: ObservableObject {
             }.value
             recordMasterAuth()
             phase = .unlocked
+            await loadItems()
             return true
         } catch {
             lastError = "Recovery code not recognized."
@@ -414,6 +417,7 @@ final class VaultGate: ObservableObject {
             let key = try await biometric.unlock()
             lock.adopt(key)
             phase = .unlocked
+            await loadItems()
             vaultLog("biometric unlock succeeded")
             return true
         } catch BiometricFailure.userCancelled {

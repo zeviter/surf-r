@@ -140,8 +140,12 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
     /// state (not for "no results"). e.g. the ⌘⇧T hint on the trusted-sites page.
     let emptyHint: String?
     let noResultsMessage: String
+    /// Bump to grab first-responder on the search field (e.g. ⌘F). Default 0 = no auto-focus.
+    let searchFocusToken: Int
     @ViewBuilder let actions: () -> Actions
     @ViewBuilder let row: (Item) -> Row
+
+    @FocusState private var searchFocused: Bool
 
     init(title: String,
          query: Binding<String>,
@@ -150,6 +154,7 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
          emptyMessage: String,
          emptyHint: String? = nil,
          noResultsMessage: String = "No results",
+         searchFocusToken: Int = 0,
          @ViewBuilder actions: @escaping () -> Actions,
          @ViewBuilder row: @escaping (Item) -> Row) {
         self.title = title
@@ -159,6 +164,7 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
         self.emptyMessage = emptyMessage
         self.emptyHint = emptyHint
         self.noResultsMessage = noResultsMessage
+        self.searchFocusToken = searchFocusToken
         self.actions = actions
         self.row = row
     }
@@ -178,6 +184,8 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField(searchPrompt, text: $query)
                     .textFieldStyle(.plain)
+                    .focused($searchFocused)
+                    .onChange(of: searchFocusToken) { _, _ in searchFocused = true }
                 if !query.isEmpty {
                     Button { query = "" } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)

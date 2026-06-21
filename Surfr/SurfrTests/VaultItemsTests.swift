@@ -91,6 +91,22 @@ final class VaultItemsTests: XCTestCase {
         XCTAssertTrue(allowed)
     }
 
+    /// Regression for the trust-destroying bug: lock clears the in-memory list, but unlocking again
+    /// in the same session must re-hydrate it — not look like "locking deleted my passwords."
+    func test_lockThenUnlock_itemPersistsInList() async {
+        let gate = await unlockedGate()
+        await gate.saveItem(id: nil, title: "GitHub", payload: LoginPayload(username: "u", password: "p"), hosts: [])
+        XCTAssertEqual(gate.items.count, 1)
+
+        gate.lockNow()
+        XCTAssertTrue(gate.items.isEmpty)           // cleared on lock (correct)
+
+        let ok = await gate.unlock(master: master)  // unlock again in the same session
+        XCTAssertTrue(ok)
+        XCTAssertEqual(gate.items.count, 1, "items must re-hydrate on unlock, not only after a save")
+        XCTAssertEqual(gate.items.first?.title, "GitHub")
+    }
+
     func test_lockClearsItems() async {
         let gate = await unlockedGate()
         await gate.saveItem(id: nil, title: "X", payload: LoginPayload(password: "p"), hosts: [])
