@@ -392,8 +392,27 @@ Two distinct fill paths, sharing the vault but driven differently.
 >   two-step login (8c still fills them; manual add covers new ones). **Edge:** a new account that
 >   *reuses* an existing password on the same site won't be auto-offered (password reuse is discouraged).
 
-> **Slice 8d as-built (login-available badge).** A quiet, clickable **key glyph** on the **active web
-> host's rail tile** (native chrome, bottom-leading; reuses the badge vocabulary alongside the
+> **Slice 8e as-built (per-field click-to-fill key icon).** A key icon drawn **adjacent to each
+> detected fillable field**, rendered in surf-r's **native chrome overlaid on the web view** (NOT page
+> DOM) — the page's JS can't query, read, or `MutationObserver`-detect it, so it doesn't disclose that
+> surf-r ran or that a credential exists (a closed-shadow-root *host* would still be observable; only a
+> native layer is invisible). The element is a **generic key glyph — no username/count/account**.
+> Isolated-world JS reports field **anchors** (`{kind,x,y,w,h}` viewport rects) inside the `detected`
+> message + on scroll/resize; the native overlay positions icons by those rects. **Scroll:** a native
+> overlay can't track WebKit's async scroll, so on scroll the icons **hide** and **re-anchor on settle**
+> (~140ms). **Colour (honest signal):** amber = a saved login is available for this field; on a
+> **successful fill** the field's icon latches **green** = "surf-r filled this" (a fact we own — NOT
+> "you're signed in"); stays amber if fill fails; cleared on navigation. **Click → the same
+> `.fillCredential` path** as ⌘\ (on-demand detect + auth gate + JS fill) — third trigger, one
+> implementation; a single match fills directly, multiple show the picker. Per-field, per-page (two-step
+> gets it on each page); main-frame only (subframe anchors aren't in the overlay's coordinate space);
+> gated by vault-unlocked. Headless: anchor kinds/rects + fill-result (`test_fieldAnchors_*`,
+> `test_fill_returnsFilledKinds`); positioning/scroll is driven-run.
+
+> **Slice 8d as-built (login-available badge).** *(8e adds the per-field icon as the primary affordance;
+> this stays as the host-level hint, now shown on **any** tab state via the host's representative web
+> tab — clicking switches to it, then fills.)* A quiet, clickable **key glyph** on the **host's rail
+> tile** (native chrome, bottom-leading; reuses the badge vocabulary alongside the
 > trust ✓ / insecure ⚠ / count badges). Its signal is **identical to the ⌘\ offer**: vault unlocked +
 > a real detected login form whose registrable host matches a stored credential (`LoginKeyBadge` shows
 > iff `AutofillController.candidates(items:)` is non-empty — the same matcher path; never host-match-
