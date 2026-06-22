@@ -392,6 +392,19 @@ Two distinct fill paths, sharing the vault but driven differently.
 >   two-step login (8c still fills them; manual add covers new ones). **Edge:** a new account that
 >   *reuses* an existing password on the same site won't be auto-offered (password reuse is discouraged).
 
+> **Slice 8d as-built (login-available badge).** A quiet, clickable **key glyph** on the **active web
+> host's rail tile** (native chrome, bottom-leading; reuses the badge vocabulary alongside the
+> trust ✓ / insecure ⚠ / count badges). Its signal is **identical to the ⌘\ offer**: vault unlocked +
+> a real detected login form whose registrable host matches a stored credential (`LoginKeyBadge` shows
+> iff `AutofillController.candidates(items:)` is non-empty — the same matcher path; never host-match-
+> alone, never on form-less pages). **Privacy:** renders a key only — never the username, a count, or
+> which account; derived in native, shown in native, nothing in page DOM. **Clickable:** posts the same
+> `.fillCredential` as ⌘\ → identical on-demand detection + biometric/auth gate + picker + JS fill
+> (one shared path; mouse and keyboard reach the same flow). **Edges:** clears on navigation to a
+> non-matching host (controller resets); reflects per-page detection on two-step logins (shows on
+> whichever page has a fillable field); **independent of the "Require auth to reveal/copy/fill"
+> setting** — the badge shows availability, auth happens at click-time.
+
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)
 and implements `prepareInterface(forPasskeyRegistration:)` + the assertion path, returning
