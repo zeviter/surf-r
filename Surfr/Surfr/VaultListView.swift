@@ -190,7 +190,7 @@ struct VaultListView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "lock.shield.fill")
                         .foregroundStyle(gate.requireAuthToReveal ? .green : .secondary)
-                    Text("Require auth to reveal/copy")
+                    Text("Require auth to reveal/copy/fill")
                 }
             }
             .toggleStyle(.switch).tint(.green)

@@ -1903,7 +1903,7 @@ struct ContentView: View {
             if vault.biometricState == .enabled {
                 guard await vault.biometricAuthenticateForReveal() else { return }
             } else {
-                showBrowserToast("Enable Touch ID, or turn off “Require auth to reveal/copy”, to fill")
+                showBrowserToast("Enable Touch ID, or turn off “Require auth to reveal/copy/fill”, to fill")
                 return
             }
         }
