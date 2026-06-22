@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>surf-r autofill fixture</title></head>
+<body>
+  <!-- Visible login form: __surfrFill should fill #user + #pass. -->
+  <form id="main">
+    <input id="user" type="text" autocomplete="username" name="u" placeholder="Username">
+    <input id="pass" type="password" name="p" placeholder="Password">
+    <button type="submit">Sign in</button>
+  </form>
+
+  <!-- Hidden-field traps: NONE of these may ever be filled. -->
+  <input id="trap-hidden" type="hidden">
+  <input id="trap-displaynone" type="password" style="display:none">
+  <input id="trap-offscreen" type="password" style="position:absolute;left:-9999px;top:-9999px">
+
+  <!-- Same-origin (srcdoc) iframe with its own form — has its own __surfrFill; the main-frame
+       fill must NOT reach into it. -->
+  <iframe id="frame"
+    srcdoc='<form><input id="fuser" type="text" autocomplete="username"><input id="fpass" type="password"></form>'></iframe>
+</body>
+</html>

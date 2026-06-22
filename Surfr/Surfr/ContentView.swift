@@ -3,6 +3,7 @@ import WebKit
 import Combine
 import AppKit
 import UniformTypeIdentifiers
+import SurfrCore
 
 extension Notification.Name {
     /// Posted by the ⌘L menu command to focus the address bar.
@@ -34,6 +35,8 @@ extension Notification.Name {
     static let openVault = Notification.Name("openVault")
     /// Vault (F5, debug): erase the vault (SQLite + Keychain) and return to a clean first-run.
     static let resetVault = Notification.Name("resetVault")
+    /// Autofill (F5, Slice 8a): ⌘\ — summon the inline credential picker for the active page.
+    static let fillCredential = Notification.Name("fillCredential")
 }
 
 private let homeURL = URL(string: "https://duckduckgo.com")!
@@ -85,6 +88,9 @@ final class Tab: ObservableObject, Identifiable {
     var activationOrder = 0
 
     private var observations: [NSKeyValueObservation] = []
+
+    /// In-browser autofill (Slice 8a): detects login forms + performs origin-matched fill.
+    let autofill = AutofillController()
 
     /// Sentinel URL for a blank/pristine tab that hasn't navigated anywhere.
     static let blankURL = URL(string: "about:blank")!
@@ -167,6 +173,10 @@ final class Tab: ObservableObject, Identifiable {
         ContentBlocker.shared.apply(to: webView)
         // HTTPS-only: the interstitial's "continue insecurely" button posts here.
         webView.configuration.userContentController.add(HTTPSUpgrader.shared, name: HTTPSUpgrader.messageName)
+        // In-browser autofill: isolated-world detector + fill handler (Slice 8a).
+        AutofillBridge.install(on: webView, handler: autofill)
+        autofill.webView = webView
+        autofill.reset()
 
         observations = []
         observations.append(webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
@@ -183,6 +193,7 @@ final class Tab: ObservableObject, Identifiable {
                 guard let u = webView.url, let host = u.host, !host.isEmpty else { return }
                 self?.url = u
                 self?.addressText = u.absoluteString
+                self?.autofill.reset()   // drop stale per-origin login contexts on navigation
             }
         })
     }
@@ -1534,6 +1545,10 @@ struct ContentView: View {
     /// DEBUG-only: confirm before the destructive Reset Vault wipe.
     @State private var showResetConfirm = false
     #endif
+    /// Slice 8a: in-browser autofill picker candidates (item + the origin-matched frame to fill).
+    @State private var autofillCandidates: [(item: StoredItem, frame: WKFrameInfo)] = []
+    /// Transient browser-chrome confirmation (fill / errors), same toast pattern as the vault.
+    @State private var browserToast: String?
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1576,8 +1591,35 @@ struct ContentView: View {
                             dismissTrustToast(id: toast.id)
                         }
                 }
+
+                // Slice 8a: inline credential picker (⌘\), keyboard-first, over the page.
+                if !autofillCandidates.isEmpty {
+                    AutofillSuggestionView(
+                        candidates: autofillCandidates.map(\.item),
+                        onPick: { item in
+                            guard let frame = autofillCandidates.first(where: { $0.item.id == item.id })?.frame else { return }
+                            Task { await performFill(item: item, frame: frame) }
+                        },
+                        onCancel: { autofillCandidates = [] }
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 64)
+                    .transition(.opacity)
+                }
+
+                // Browser-chrome toast (fill confirmation / errors), bottom-center, auto-clears.
+                if let msg = browserToast {
+                    Label(msg, systemImage: "checkmark.circle.fill")
+                        .font(.callout).padding(.horizontal, 14).padding(.vertical, 9)
+                        .background(.regularMaterial, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Color.green.opacity(0.4)))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .padding(.bottom, 24)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
         }
+        .animation(.easeInOut(duration: 0.18), value: browserToast)
         .frame(minWidth: 800, minHeight: 600)
         // F5 Slice 3: make the vault coordinator available to the vault surface placeholder.
         .environmentObject(vault)
@@ -1660,6 +1702,10 @@ struct ContentView: View {
                 showVault = true
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .fillCredential)) { _ in
+            summonAutofill()
+        }
+        .onChange(of: browser.activeTabID) { _, _ in autofillCandidates = [] }   // dismiss picker on tab switch
         .onReceive(NotificationCenter.default.publisher(for: .toggleBookmark)) { _ in
             let webView = browser.activeTab.webView
             guard let url = webView.url else { return }
@@ -1798,6 +1844,45 @@ struct ContentView: View {
             browser.openInNewTab(url)
         } else {
             browser.navigateActiveTab(to: url)   // internal pages give way to the web page
+        }
+    }
+
+    /// ⌘\ — summon the inline credential picker for the active web page (Slice 8a).
+    private func summonAutofill() {
+        showSpotlight = false
+        guard browser.activeTab.kind == .web else { return }
+        guard vault.phase == .unlocked else {
+            showBrowserToast("Unlock the vault to fill")
+            NotificationCenter.default.post(name: .openVault, object: nil)
+            return
+        }
+        let candidates = browser.activeTab.autofill.candidates(items: vault.items)
+        if candidates.isEmpty {
+            showBrowserToast("No saved login for this site")
+        } else {
+            autofillCandidates = candidates
+        }
+    }
+
+    /// Biometric-gate (when enabled), decrypt, and fill into the origin-matched frame. The decrypted
+    /// password is handed to the fill call and not retained by surf-r afterward.
+    private func performFill(item: StoredItem, frame: WKFrameInfo) async {
+        autofillCandidates = []
+        // Per-action auth mirrors the reveal gate; biometric only when actually enabled (the vault is
+        // already unlocked). Master-fallback-for-fill on non-biometric Macs is a documented follow-on.
+        if vault.requireAuthToReveal && vault.biometricState == .enabled {
+            guard await vault.biometricAuthenticateForReveal() else { return }
+        }
+        guard let payload = vault.decryptPayload(item) else { showBrowserToast("Couldn’t decrypt login"); return }
+        await browser.activeTab.autofill.fill(username: payload.username, password: payload.password, into: frame)
+        showBrowserToast("Filled \(item.title.isEmpty ? "login" : item.title)")
+    }
+
+    private func showBrowserToast(_ message: String) {
+        browserToast = message
+        Task {
+            try? await Task.sleep(nanoseconds: 1_800_000_000)
+            if browserToast == message { browserToast = nil }
         }
     }
 
