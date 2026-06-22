@@ -408,6 +408,12 @@ Two distinct fill paths, sharing the vault but driven differently.
 > gets it on each page); main-frame only (subframe anchors aren't in the overlay's coordinate space);
 > gated by vault-unlocked. Headless: anchor kinds/rects + fill-result (`test_fieldAnchors_*`,
 > `test_fill_returnsFilledKinds`); positioning/scroll is driven-run.
+> **8e fixes:** (a) the fill auth gate now has a real **master-password fallback** — biometric cancel
+> ("Use master password") or no-biometric presents a master prompt (`FillAuth.needsMasterFallback`,
+> tested) instead of silently aborting (it was a dead button). (b) the **green latch clears on every
+> page load/reload** via a `pageload` message (the URL-KVO misses same-URL reload), so green never
+> outlives the field's contents. (c) the icon sits **just past the field's trailing edge** (narrow-form
+> fallback: tuck inside) so it doesn't overlap the site's reveal-eye/clear-X.
 
 > **Slice 8d as-built (login-available badge).** *(8e adds the per-field icon as the primary affordance;
 > this stays as the host-level hint, now shown on **any** tab state via the host's representative web
