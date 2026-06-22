@@ -42,12 +42,12 @@ final class VaultItemsTests: XCTestCase {
         tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("surfr-items-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         UserDefaults.standard.removeObject(forKey: "SurfrVaultLastMasterAuth")
-        UserDefaults.standard.removeObject(forKey: VaultGate.hostRepairFlag)   // let the host repair run per test
+        UserDefaults.standard.removeObject(forKey: VaultGate.hostRecoveryAttemptedKey)   // fresh recovery attempts per test
     }
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: tempDir)
         UserDefaults.standard.removeObject(forKey: "SurfrVaultLastMasterAuth")
-        UserDefaults.standard.removeObject(forKey: VaultGate.hostRepairFlag)
+        UserDefaults.standard.removeObject(forKey: VaultGate.hostRecoveryAttemptedKey)
     }
 
     /// Biometric not enabled, so reveal/decrypt paths never trigger a real Touch ID prompt in CI.
@@ -261,9 +261,7 @@ final class VaultItemsTests: XCTestCase {
         await gate.saveItem(id: nil, title: "Barbican",
                             payload: LoginPayload(password: "p", urls: ["https://www.barbican.org.uk/whats-on?id=123"]),
                             hosts: [])   // simulates the broken legacy import: empty item_hosts
-        // Simulate the one-time migration running with this legacy item present.
-        UserDefaults.standard.removeObject(forKey: VaultGate.hostRepairFlag)
-        await gate.loadItems()
+        // saveItem → loadItems runs the per-item recovery: empty host → recover from payload URL.
         XCTAssertEqual(gate.items.first?.hosts.map(\.host), ["barbican.org.uk"])
     }
 

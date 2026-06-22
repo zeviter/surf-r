@@ -63,6 +63,9 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
         hasLoginForm = !contexts.isEmpty
     }
 
+    /// Origins of frames that reported a login form — for diagnosing match misses.
+    var detectedOrigins: [String] { contexts.values.map { "\($0.scheme)://\($0.host)" } }
+
     /// Reset on navigation (stale frames/origins should not linger).
     func reset() {
         contexts.removeAll()

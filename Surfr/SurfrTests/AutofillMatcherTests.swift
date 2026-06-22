@@ -4,6 +4,7 @@ import SurfrCore
 
 /// The anti-leak guarantee, provable on demand. A credential is offerable ONLY on an exact
 /// registrable-domain match over HTTPS — never to a look-alike, suffix-attack, or wrong scheme.
+@MainActor
 final class AutofillMatcherTests: XCTestCase {
 
     private func item(_ title: String, _ hosts: [String], modified: TimeInterval = 0) -> StoredItem {
@@ -72,6 +73,20 @@ final class AutofillMatcherTests: XCTestCase {
         XCTAssertTrue(offers("https", "amazon.co.uk", "www.amazon.co.uk"))
         // A path that merely mentions the domain on a different host must NOT match.
         XCTAssertFalse(offers("https", "www.amazon.co.uk", "https://evil.com/amazon.co.uk"))
+    }
+
+    // The exact Barbican case: stored full URL with a NON-www subdomain AND a path, page on www.
+    // Both reduce to barbican.org.uk → must match. (org.uk is a multi-label public suffix.)
+    func test_barbican_subdomainPlusPathURL_matches() {
+        XCTAssertTrue(offers("https", "www.barbican.org.uk", "https://tickets.barbican.org.uk/j348343jwjfn"))
+        XCTAssertTrue(offers("https", "www.barbican.org.uk", "tickets.barbican.org.uk"))
+        XCTAssertTrue(offers("https", "tickets.barbican.org.uk", "https://www.barbican.org.uk/"))
+        // hostComponent extracts the subdomain host; registrableDomain reduces it to the org domain.
+        XCTAssertEqual(TrustStore.hostComponent(from: "https://tickets.barbican.org.uk/j348343jwjfn"), "tickets.barbican.org.uk")
+        XCTAssertEqual(TrustStore.registrableDomain(forHostOrURL: "https://tickets.barbican.org.uk/j348343jwjfn"), "barbican.org.uk")
+        // Anti-leak intact: a different org under org.uk does NOT match.
+        XCTAssertFalse(offers("https", "www.barbican.org.uk", "evil-barbican.org.uk"))
+        XCTAssertFalse(offers("https", "www.barbican.org.uk", "https://tickets.othersite.org.uk/x"))
     }
 
     func test_hostsMatch_unit() {

@@ -1858,7 +1858,17 @@ struct ContentView: View {
         }
         let candidates = browser.activeTab.autofill.candidates(items: vault.items)
         if candidates.isEmpty {
-            showBrowserToast("No saved login for this site")
+            // Distinguish the two failure modes so a miss is diagnosable, not opaque:
+            //  • no login field detected → two-step/iframe/dynamic page (not a host-match problem);
+            //  • a form WAS detected but no credential matched → genuine host/credential gap.
+            if browser.activeTab.autofill.hasLoginForm {
+                showBrowserToast("No saved login matches this page")
+                #if DEBUG
+                print("[Autofill] detected login on \(browser.activeTab.autofill.detectedOrigins) but no vault match")
+                #endif
+            } else {
+                showBrowserToast("No login field detected on this page")
+            }
         } else {
             autofillCandidates = candidates
         }
