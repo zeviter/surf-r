@@ -355,7 +355,13 @@ Two distinct fill paths, sharing the vault but driven differently.
 >   shadow host → … → document and rejects the field if any node is `display:none` / `visibility:hidden`
 >   / `opacity:0` / zero-size / off-screen. So a closed (hidden-host) popup behaves like no form at all —
 >   no offer, no "filled into invisible fields" (the hidden-field-trap class). Proven by
->   `test_shadowLogin_hiddenHost_offersAndFillsNothing`.
+>   `test_shadowLogin_hiddenHost_offersAndFillsNothing`. `isVisible` also uses the browser's
+>   `Element.checkVisibility()` (adds `content-visibility`) and rejects fields inside a `height:0`/
+>   `width:0` clipped ancestor (`test_collapsedAncestor_offersAndFillsNothing`).
+> - **Documented limit:** a dynamic open-shadow-root popup that **hides rather than removes** its fields
+>   on close, via a mechanism none of the above detect (e.g. Barbican), may still report a fill into a
+>   no-longer-visible field — workaround: fill while the popup is open. Cross-origin iframe and
+>   closed-shadow-root logins remain unsupported. See `known-issues.md`.
 
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)

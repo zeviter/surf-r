@@ -26,3 +26,11 @@ Parked edge cases — documented for transparency, not scheduled for a fix yet.
 | Issue | Current behaviour | Severity | Notes / workaround |
 |---|---|---|---|
 | SVG-only favicons aren't rendered | A host whose only icon is SVG resolves to `nil`, so the UI falls back to the letter tile (AppKit can't render SVG). | Low | Acceptable fallback; could add SVG rasterisation later. |
+
+## In-browser autofill (`Surfr/Surfr/Autofill.js`)
+
+| Issue | Current behaviour | Severity | Notes / workaround |
+|---|---|---|---|
+| Dynamic shadow-DOM popup that hides (not removes) its fields on close | Fill may still offer/fill on an **open-shadow-root** login popup that **hides rather than removes** its fields on close, if the site's hide mechanism isn't detectable via composed-tree traversal (we reject `display:none` / `visibility:hidden` / `opacity:0` / `content-visibility` via `checkVisibility`, zero-size, off-screen, and `height:0`/`width:0` clipped ancestors). A residual mechanism (e.g. Barbican's login popup) can report a "filled" into a no-longer-visible field. | Low — confusing, latent hidden-field-trap class; the *general* visible-only protection holds | **Workaround: fill while the popup is open.** The general hidden-field-trap protection (composed-tree visibility) is in place; this is a specific uncovered hide mechanism. |
+| Cross-origin iframe logins | A login form in a **cross-origin iframe** isn't filled (detection runs per-frame but matching/fill is main + same-origin only). | Low | Deferred from 8a; documented. |
+| Closed shadow-root logins | Fields inside a **closed** shadow root are invisible to detection/fill (only open roots are pierced). | Low | Inherent — closed roots are inaccessible by design. |
