@@ -18,6 +18,11 @@ struct VaultEditView: View {
     @State private var notes = ""
     @State private var totpURI = ""
     @State private var loaded = false
+    // In-Edit QR scan: hold the source image (access stays open) until the delete decision.
+    @State private var scannedImageURL: URL?
+    @State private var scanAccessing = false
+    @State private var showDeleteScanPrompt = false
+    @State private var scanMessage: String?
 
     private var isNew: Bool { existing == nil }
 
@@ -39,6 +44,7 @@ struct VaultEditView: View {
                         TextField("otpauth://… or leave blank", text: $totpURI).textFieldStyle(.roundedBorder)
                         Button("Scan image…") { scanTOTPImage() }
                     }
+                    if let m = scanMessage { Text(m).font(.caption).foregroundStyle(.orange) }
                     if !totpURI.isEmpty, TOTP(otpauthURI: totpURI) == nil {
                         Text("Not a valid otpauth:// link.").font(.caption).foregroundStyle(.red)
                     }
@@ -67,6 +73,12 @@ struct VaultEditView: View {
             totpURI = payload.totp ?? ""
             loaded = true
         }
+        .confirmationDialog("Delete the QR image?", isPresented: $showDeleteScanPrompt, titleVisibility: .visible) {
+            Button("Delete image", role: .destructive) { resolveScannedImage(delete: true) }
+            Button("Keep image", role: .cancel) { resolveScannedImage(delete: false) }
+        } message: {
+            Text("That image contains this 2FA seed in the clear. Deleting unlinks it, but on SSD/APFS a secure overwrite isn’t guaranteed; also remove any copies (Photos, Downloads, cloud, Trash).")
+        }
     }
 
     private func save() async {
@@ -78,19 +90,39 @@ struct VaultEditView: View {
         onDone()
     }
 
-    /// Scan a QR image into the TOTP field (first otpauth:// found).
+    /// Scan a QR image into the TOTP field (first otpauth:// found). On success the source image —
+    /// a plaintext 2FA seed on disk — is held open so we can offer to delete it (same hygiene as the
+    /// bulk "Import 2FA…" path); on failure we surface a message instead of doing nothing.
     private func scanTOTPImage() {
+        scanMessage = nil
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.png, .jpeg, .tiff, .image]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         var data = (try? Data(contentsOf: url, options: [.uncached])) ?? Data()
-        defer { data.resetBytes(in: 0..<data.count) }
-        if let first = QRDecoder.decodeQRStrings(imageData: data).lazy.compactMap({ TOTPImportCoordinator.decodeTOTPs(from: $0).first }).first {
-            totpURI = first.otpauthURI()
+        let found = QRDecoder.decodeQRStrings(imageData: data)
+            .lazy.compactMap { TOTPImportCoordinator.decodeTOTPs(from: $0).first }.first
+        data.resetBytes(in: 0..<data.count)   // wipe raw image bytes after decode
+
+        if let found {
+            totpURI = found.otpauthURI()
+            scannedImageURL = url              // keep access open for the delete decision
+            scanAccessing = accessing
+            showDeleteScanPrompt = true
+        } else {
+            if accessing { url.stopAccessingSecurityScopedResource() }
+            scanMessage = "No one-time-code QR found in that image."
         }
+    }
+
+    /// Resolve the post-scan delete prompt: delete happens inside the access window, before release.
+    private func resolveScannedImage(delete: Bool) {
+        if let url = scannedImageURL {
+            if delete { try? FileManager.default.removeItem(at: url) }
+            if scanAccessing { url.stopAccessingSecurityScopedResource() }
+        }
+        scannedImageURL = nil; scanAccessing = false
     }
 
     /// Derive the registrable host from the website field for `item_hosts` (drives favicon + fill).
