@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Subscribe to our newsletter</title></head>
+<body>
+  <h2>Subscribe to our newsletter</h2>
+  <!-- A bare type=email field (WEAK signal, no autocomplete). Whether this counts as a login username
+       depends ENTIRELY on context: loaded at a /login URL → corroborated → treated as login; loaded at
+       a plain URL (newsletter) → NOT a login → must not trigger. Same markup, two outcomes. -->
+  <form action="/subscribe">
+    <input id="email" type="email" name="email" placeholder="Your email">
+    <button type="submit">Subscribe</button>
+  </form>
+</body>
+</html>

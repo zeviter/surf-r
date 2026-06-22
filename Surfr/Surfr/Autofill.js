@@ -25,9 +25,42 @@
     return Array.prototype.filter.call(document.querySelectorAll('input[type="password"]'), isVisible);
   }
 
+  // Login context for the WEAK (bare type=email/text) path: only treat such a field as a login
+  // username when there's corroborating sign-in context — so newsletter/contact/quote forms don't
+  // trigger. autocomplete=username/email (the STRONG path) bypasses this entirely.
+  function loginContext(field) {
+    const hay = (location.href + " " + document.title).toLowerCase();
+    if (/sign[\s-]?in|log[\s-]?in|signin|login|\/auth|\/account|sso/.test(hay)) return true;
+    const action = ((field && field.form && field.form.getAttribute("action")) || "").toLowerCase();
+    if (/sign[\s-]?in|log[\s-]?in|signin|login|auth|sso/.test(action)) return true;
+    const headings = document.querySelectorAll("h1,h2,h3,legend,button,[type=submit],[role=heading]");
+    return Array.prototype.some.call(headings, (e) => /sign\s?in|log\s?in/.test((e.textContent || "").toLowerCase()));
+  }
+
+  // A username field on a username-FIRST (two-step) page: only when there's NO visible password field.
+  function usernameCandidate() {
+    if (passwordFields().length) return null;
+    const inputs = Array.prototype.filter.call(document.querySelectorAll("input"), isVisible);
+    // STRONG, trusted: autocomplete=username / email.
+    const strong = inputs.find((el) => {
+      const ac = (el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/);
+      return ac.includes("username") || ac.includes("email");
+    });
+    if (strong) return strong;
+    // WEAK: bare email/text — require login-context corroboration.
+    const weak = inputs.filter((el) => { const t = (el.type || "text").toLowerCase(); return t === "email" || t === "text"; });
+    return weak.find((el) => loginContext(el)) || null;
+  }
+
   // STRUCTURE ONLY — no values.
   function detect() {
-    HANDLER.postMessage({ type: "detected", origin: location.origin, hasPassword: passwordFields().length > 0 });
+    const hasPassword = passwordFields().length > 0;
+    HANDLER.postMessage({
+      type: "detected",
+      origin: location.origin,
+      hasPassword: hasPassword,
+      hasUsername: !hasPassword && usernameCandidate() !== null
+    });
   }
 
   // Username field for a password field: explicit autocomplete=username, else the nearest visible
@@ -51,6 +84,14 @@
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
   }
+
+  // Fill ONLY the username on a username-first page (no password is sent to the page on step 1).
+  globalThis.__surfrFillUsername = function (username) {
+    const u = usernameCandidate();
+    if (!u) return { filledUsername: false };
+    setValue(u, username);
+    return { filledUsername: true };
+  };
 
   // Invoked by native (this content world). Fills VISIBLE fields only; returns booleans only.
   globalThis.__surfrFill = function (username, password) {

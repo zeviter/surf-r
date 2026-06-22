@@ -1545,8 +1545,9 @@ struct ContentView: View {
     /// DEBUG-only: confirm before the destructive Reset Vault wipe.
     @State private var showResetConfirm = false
     #endif
-    /// Slice 8a: in-browser autofill picker candidates (item + the origin-matched frame to fill).
-    @State private var autofillCandidates: [(item: StoredItem, frame: WKFrameInfo)] = []
+    /// Slice 8a/8c: autofill picker candidates (item + the origin-matched frame + whether the page is
+    /// a two-step username-only page, so we fill just the username).
+    @State private var autofillCandidates: [(item: StoredItem, frame: WKFrameInfo, usernameOnly: Bool)] = []
     /// Transient browser-chrome confirmation (fill / errors), same toast pattern as the vault.
     @State private var browserToast: String?
 
@@ -1597,8 +1598,8 @@ struct ContentView: View {
                     AutofillSuggestionView(
                         candidates: autofillCandidates.map(\.item),
                         onPick: { item in
-                            guard let frame = autofillCandidates.first(where: { $0.item.id == item.id })?.frame else { return }
-                            Task { await performFill(item: item, frame: frame) }
+                            guard let c = autofillCandidates.first(where: { $0.item.id == item.id }) else { return }
+                            Task { await performFill(item: item, frame: c.frame, usernameOnly: c.usernameOnly) }
                         },
                         onCancel: { autofillCandidates = [] }
                     )
@@ -1876,7 +1877,7 @@ struct ContentView: View {
 
     /// Biometric-gate (when enabled), decrypt, and fill into the origin-matched frame. The decrypted
     /// password is handed to the fill call and not retained by surf-r afterward.
-    private func performFill(item: StoredItem, frame: WKFrameInfo) async {
+    private func performFill(item: StoredItem, frame: WKFrameInfo, usernameOnly: Bool) async {
         autofillCandidates = []
         // Per-action auth mirrors the reveal gate; biometric only when actually enabled (the vault is
         // already unlocked). Master-fallback-for-fill on non-biometric Macs is a documented follow-on.
@@ -1884,8 +1885,15 @@ struct ContentView: View {
             guard await vault.biometricAuthenticateForReveal() else { return }
         }
         guard let payload = vault.decryptPayload(item) else { showBrowserToast("Couldn’t decrypt login"); return }
-        await browser.activeTab.autofill.fill(username: payload.username, password: payload.password, into: frame)
-        showBrowserToast("Filled \(item.title.isEmpty ? "login" : item.title)")
+        let name = item.title.isEmpty ? "login" : item.title
+        if usernameOnly {
+            // Two-step page 1: fill only the username; the password is NOT sent to the page yet.
+            await browser.activeTab.autofill.fillUsername(payload.username, into: frame)
+            showBrowserToast("Filled username — continue, then ⌘\\ for the password")
+        } else {
+            await browser.activeTab.autofill.fill(username: payload.username, password: payload.password, into: frame)
+            showBrowserToast("Filled \(name)")
+        }
     }
 
     private func showBrowserToast(_ message: String) {

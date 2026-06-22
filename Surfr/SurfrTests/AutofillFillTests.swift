@@ -56,6 +56,82 @@ final class AutofillFillTests: XCTestCase {
     }
 }
 
+// MARK: - Username-first (8c) detection weighting
+
+extension AutofillFillTests {
+    private static let testWorld = WKContentWorld.world(name: "TestAutofill")
+
+    private func fixtureURL(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/\(name)")
+    }
+
+    /// Load a fixture at a given origin with the real Autofill.js in the isolated world; wait for the
+    /// load + the first detection message.
+    private func load(_ fixture: String, at baseURL: String) async throws -> (WKWebView, CapturingHandler) {
+        let js = try String(contentsOf: repoFile("Autofill.js"), encoding: .utf8)
+        let html = try String(contentsOf: fixtureURL(fixture), encoding: .utf8)
+        let config = WKWebViewConfiguration()
+        let handler = CapturingHandler()
+        config.userContentController.add(handler, contentWorld: Self.testWorld, name: "surfrAutofill")
+        config.userContentController.addUserScript(
+            WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: Self.testWorld))
+        let webView = WKWebView(frame: .init(x: 0, y: 0, width: 400, height: 400), configuration: config)
+        let delegate = NavDelegate()
+        webView.navigationDelegate = delegate
+        webView.loadHTMLString(html, baseURL: URL(string: baseURL)!)
+        await delegate.waitForFinish()
+        for _ in 0..<50 where handler.lastDetected == nil { try? await Task.sleep(nanoseconds: 20_000_000) }
+        return (webView, handler)
+    }
+
+    private func emailValue(_ webView: WKWebView) async throws -> String {
+        (try await webView.evaluateJavaScript("document.getElementById('email').value", in: nil, contentWorld: Self.testWorld) as? String) ?? "<nil>"
+    }
+
+    /// STRONG signal (autocomplete=username) → detected + filled, regardless of URL.
+    func test_usernameFirst_strong_detectsAndFills() async throws {
+        let (webView, handler) = try await load("autofill_username_first.html", at: "https://example.com/")
+        XCTAssertEqual(handler.lastDetected?["hasUsername"] as? Bool, true)
+        XCTAssertEqual(handler.lastDetected?["hasPassword"] as? Bool, false)
+        _ = try await webView.callAsyncJavaScript("return await __surfrFillUsername(username)",
+                                                  arguments: ["username": "alice@example.com"], in: nil, contentWorld: Self.testWorld)
+        let value = try await emailValue(webView)
+        XCTAssertEqual(value, "alice@example.com")
+    }
+
+    /// WEAK signal (bare type=email) + login URL context → detected + filled.
+    func test_weakEmail_withLoginContext_detects() async throws {
+        let (webView, handler) = try await load("autofill_email_form.html", at: "https://example.com/account/login")
+        XCTAssertEqual(handler.lastDetected?["hasUsername"] as? Bool, true, "bare email at a /login URL is corroborated")
+        _ = try await webView.callAsyncJavaScript("return await __surfrFillUsername(username)",
+                                                  arguments: ["username": "bob@example.com"], in: nil, contentWorld: Self.testWorld)
+        let value = try await emailValue(webView)
+        XCTAssertEqual(value, "bob@example.com")
+    }
+
+    /// The proof of conservatism: the SAME bare-email markup as a newsletter (no login context) must
+    /// NOT be treated as a login — no detection, and __surfrFillUsername fills nothing.
+    func test_newsletter_noContext_doesNotDetectOrFill() async throws {
+        let (webView, handler) = try await load("autofill_email_form.html", at: "https://shop.example.com/")
+        XCTAssertEqual(handler.lastDetected?["hasUsername"] as? Bool, false, "newsletter email must not count as a login")
+        _ = try await webView.callAsyncJavaScript("return await __surfrFillUsername(username)",
+                                                  arguments: ["username": "spam@example.com"], in: nil, contentWorld: Self.testWorld)
+        let value = try await emailValue(webView)
+        XCTAssertEqual(value, "", "newsletter field must stay empty")
+    }
+}
+
+private final class CapturingHandler: NSObject, WKScriptMessageHandler {
+    private(set) var lastDetected: [String: Any]?
+    func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
+        MainActor.assumeIsolated {
+            if let body = message.body as? [String: Any], body["type"] as? String == "detected" {
+                lastDetected = body
+            }
+        }
+    }
+}
+
 private final class NoopHandler: NSObject, WKScriptMessageHandler {
     func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {}
 }

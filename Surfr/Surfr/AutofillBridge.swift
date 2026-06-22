@@ -13,6 +13,8 @@ enum AutofillBridge {
     /// `__surfrFill` is defined by the user script in `world`; native calls it with safely-passed
     /// arguments (never string-interpolated — no injection, nothing to log).
     static let fillInvocation = "return await __surfrFill(username, password)"
+    /// Username-only fill for a two-step page-1 (no password sent to the page).
+    static let fillUsernameInvocation = "return await __surfrFillUsername(username)"
 
     static let userScriptSource: String = {
         guard let url = Bundle.main.url(forResource: "Autofill", withExtension: "js"),
@@ -35,7 +37,7 @@ enum AutofillBridge {
 /// credentials, and performs the fill into the matched-origin frame.
 @MainActor
 final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandler {
-    struct FrameContext { let frame: WKFrameInfo; let scheme: String; let host: String }
+    struct FrameContext { let frame: WKFrameInfo; let scheme: String; let host: String; let hasPassword: Bool; let hasUsername: Bool }
 
     /// Drives the UI affordance (a login form matching some credential exists on this page).
     @Published private(set) var hasLoginForm = false
@@ -47,16 +49,19 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
         // WebKit delivers on the main thread.
         MainActor.assumeIsolated {
             let origin = message.frameInfo.securityOrigin
-            let hasPassword = (message.body as? [String: Any])?["hasPassword"] as? Bool ?? false
-            update(scheme: origin.protocol, host: origin.host, hasPassword: hasPassword, frame: message.frameInfo)
+            let body = message.body as? [String: Any]
+            update(scheme: origin.protocol, host: origin.host,
+                   hasPassword: body?["hasPassword"] as? Bool ?? false,
+                   hasUsername: body?["hasUsername"] as? Bool ?? false,
+                   frame: message.frameInfo)
         }
     }
 
-    private func update(scheme: String, host: String, hasPassword: Bool, frame: WKFrameInfo) {
+    private func update(scheme: String, host: String, hasPassword: Bool, hasUsername: Bool, frame: WKFrameInfo) {
         guard !host.isEmpty else { return }
         let key = "\(scheme)://\(host)"
-        if hasPassword {
-            contexts[key] = FrameContext(frame: frame, scheme: scheme, host: host)
+        if hasPassword || hasUsername {
+            contexts[key] = FrameContext(frame: frame, scheme: scheme, host: host, hasPassword: hasPassword, hasUsername: hasUsername)
         } else {
             contexts.removeValue(forKey: key)
         }
@@ -72,24 +77,35 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
         hasLoginForm = false
     }
 
-    /// Matched credentials across detected login frames (deduped), each paired with the frame to fill.
-    func candidates(items: [StoredItem]) -> [(item: StoredItem, frame: WKFrameInfo)] {
-        var out: [(StoredItem, WKFrameInfo)] = []
+    /// Matched credentials across detected login frames (deduped), each with the frame to fill and
+    /// whether it's a username-only (two-step page-1) context. Password contexts rank first.
+    func candidates(items: [StoredItem]) -> [(item: StoredItem, frame: WKFrameInfo, usernameOnly: Bool)] {
+        var out: [(StoredItem, WKFrameInfo, Bool)] = []
         var seen = Set<UUID>()
-        for ctx in contexts.values {
+        let ordered = contexts.values.sorted { $0.hasPassword && !$1.hasPassword }   // password contexts first
+        for ctx in ordered {
             for item in AutofillMatcher.matches(scheme: ctx.scheme, host: ctx.host, items: items) where seen.insert(item.id).inserted {
-                out.append((item, ctx.frame))
+                out.append((item, ctx.frame, !ctx.hasPassword))
             }
         }
         return out
     }
 
-    /// Fill into a specific origin-matched frame, in the isolated world.
+    /// Fill username + password into a specific origin-matched frame, in the isolated world.
     func fill(username: String, password: String, into frame: WKFrameInfo) async {
         guard let webView else { return }
         _ = try? await webView.callAsyncJavaScript(
             AutofillBridge.fillInvocation,
             arguments: ["username": username, "password": password],
+            in: frame, contentWorld: AutofillBridge.world)
+    }
+
+    /// Fill ONLY the username (two-step page-1) — no password sent to the page.
+    func fillUsername(_ username: String, into frame: WKFrameInfo) async {
+        guard let webView else { return }
+        _ = try? await webView.callAsyncJavaScript(
+            AutofillBridge.fillUsernameInvocation,
+            arguments: ["username": username],
             in: frame, contentWorld: AutofillBridge.world)
     }
 }
