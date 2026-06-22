@@ -131,6 +131,19 @@ extension AutofillFillTests {
         XCTAssertEqual(onDemand?["hasUsername"] as? Bool, false)
     }
 
+    /// Security regression guard: a home page with a "Log in" BUTTON + a search box (no actual login
+    /// form) must NOT be treated as a login — host match alone must never offer/fill. Detection reports
+    /// neither field, and __surfrFillUsername fills nothing (the search box stays empty).
+    func test_homePage_loginButtonAndSearch_offersAndFillsNothing() async throws {
+        let (webView, handler) = try await load("autofill_home_no_form.html", at: "https://www.barbican.org.uk/")
+        XCTAssertEqual(handler.lastDetected?["hasPassword"] as? Bool, false)
+        XCTAssertEqual(handler.lastDetected?["hasUsername"] as? Bool, false, "a Log in button + search box is NOT a login form")
+        _ = try await webView.callAsyncJavaScript("return await __surfrFillUsername(username)",
+                                                  arguments: ["username": "victim@example.com"], in: nil, contentWorld: Self.testWorld)
+        let search = (try await webView.evaluateJavaScript("document.getElementById('search').value", in: nil, contentWorld: Self.testWorld) as? String) ?? "<nil>"
+        XCTAssertEqual(search, "", "the search box must never receive a credential")
+    }
+
     /// The proof of conservatism: the SAME bare-email markup as a newsletter (no login context) must
     /// NOT be treated as a login — no detection, and __surfrFillUsername fills nothing.
     func test_newsletter_noContext_doesNotDetectOrFill() async throws {

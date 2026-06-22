@@ -40,21 +40,38 @@
   }
 
   // Login context for the WEAK (bare type=email/text) path: only treat such a field as a login
-  // username when there's corroborating sign-in context — so newsletter/contact/quote forms don't
+  // username when there's corroborating sign-in context — so newsletter/contact/home pages don't
   // trigger. autocomplete=username/email (the STRONG path) bypasses this entirely.
+  //
+  // IMPORTANT: a login PAGE signal (URL/title is a sign-in page, or the field's own form posts to a
+  // login endpoint, or a sign-in HEADING) — NOT a page-level "Log in" button/link (every home page has
+  // one). Using button text corroborated a home page's search box as a username field — a real
+  // security regression. Headings only (h1/h2/legend), never buttons/links.
   function loginContext(field) {
     const hay = (location.href + " " + document.title).toLowerCase();
     if (/sign[\s-]?in|log[\s-]?in|signin|login|\/auth|\/account|sso/.test(hay)) return true;
     const action = ((field && field.form && field.form.getAttribute("action")) || "").toLowerCase();
     if (/sign[\s-]?in|log[\s-]?in|signin|login|auth|sso/.test(action)) return true;
-    const headings = document.querySelectorAll("h1,h2,h3,legend,button,[type=submit],[role=heading]");
+    const headings = document.querySelectorAll("h1,h2,h3,legend,[role=heading]");
     return Array.prototype.some.call(headings, (e) => /sign\s?in|log\s?in/.test((e.textContent || "").toLowerCase()));
+  }
+
+  // Exclude search/query boxes — they must never be treated as login fields or receive a fill, even on
+  // a login page or a page with a sign-in heading.
+  function looksLikeSearch(el) {
+    if ((el.type || "").toLowerCase() === "search") return true;
+    const meta = ((el.name || "") + " " + (el.id || "") + " " + (el.getAttribute("aria-label") || "") + " " + (el.placeholder || "")).toLowerCase();
+    if (/search|\bquery\b|\bq\b/.test(meta)) return true;
+    const formAction = ((el.form && el.form.getAttribute("action")) || "").toLowerCase();
+    if (/search/.test(formAction)) return true;
+    const role = ((el.getAttribute("role") || "") + " " + ((el.form && el.form.getAttribute("role")) || "")).toLowerCase();
+    return role.includes("search");
   }
 
   // A username field on a username-FIRST (two-step) page: only when there's NO visible password field.
   function usernameCandidate() {
     if (passwordFields().length) return null;
-    const inputs = deepQueryAll("input").filter(isVisible);
+    const inputs = deepQueryAll("input").filter(isVisible).filter((el) => !looksLikeSearch(el));
     // STRONG, trusted: autocomplete=username / email.
     const strong = inputs.find((el) => {
       const ac = (el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/);
@@ -86,7 +103,7 @@
   // text-ish input preceding it in DOM order (same form if any).
   function usernameFor(pw) {
     const sel = 'input[autocomplete="username"], input[type="text"], input[type="email"], input[type="tel"], input:not([type])';
-    const fields = deepQueryAll(sel).filter(isVisible);
+    const fields = deepQueryAll(sel).filter(isVisible).filter((el) => !looksLikeSearch(el));
     const explicit = fields.find((el) => (el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/).includes("username"));
     if (explicit) return explicit;
     let best = null;
