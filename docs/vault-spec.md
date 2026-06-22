@@ -379,11 +379,18 @@ Two distinct fill paths, sharing the vault but driven differently.
 > - **Captured-secret lifetime:** held in a `WipeableSecret` with a **bounded ~90s timeout** and
 >   **zero-on-every-exit** — save / Never / dismiss(✕) / tab-switch / auto-lock / timeout / replacement /
 >   `deinit` all wipe it. The only retained copy.
-> - **UX:** unobtrusive bottom bar; **✕ = dismiss once** (no re-nag — auto-dismiss if ignored) is
->   distinct from **Never** (persisted per-site suppression). Locked vault → **"Unlock & Save"** (unlock,
->   then store on the same page; the decision is recomputed post-unlock so a dup is still skipped — no
->   eject). Proven: single-password login captures; change-form (3 passwords) and hidden-password
->   forms do **not** (`test_save_*`).
+> - **UX:** unobtrusive bottom bar with **three labeled outcomes** — **Not now** (dismiss this prompt
+>   only; re-offers next qualifying login; never writes the never-list), **Never** (persisted per-site
+>   suppression), **Save/Update**. Auto-dismiss if ignored (no re-nag). Locked vault → **"Unlock &
+>   Save"** (unlock, then store on the same page; decision recomputed post-unlock so a dup is still
+>   skipped — no eject). Proven: single-password login captures; change-form (3 passwords), signup (2
+>   passwords), hidden-password, and **password-only pages** do **not** (`test_save_*`).
+> - **Capture requires a non-empty adjacent username** — a **password-only page** (e.g. a two-step
+>   login's page 2) can't be deduped, so capturing it would spuriously re-offer the just-filled
+>   credential. Belt-and-suspenders: a password already stored for the host is a **dup regardless of
+>   username**. **Deferred to v1.5:** stateful cross-page username-carry for capturing a *genuinely new*
+>   two-step login (8c still fills them; manual add covers new ones). **Edge:** a new account that
+>   *reuses* an existing password on the same site won't be auto-offered (password reuse is discouraged).
 
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)
