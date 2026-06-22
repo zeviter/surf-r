@@ -290,7 +290,10 @@ Two distinct fill paths, sharing the vault but driven differently.
 > `WKFrameInfo.securityOrigin` (a page can't spoof its own origin), and fill targets that
 > origin-matched frame. Look-alikes (`evil-example.com`), suffix attacks (`example.com.evil.com` →
 > `evil.com`), typo-squats, wrong-TLD, and `http://` are all rejected — proven by the
-> `AutofillMatcherTests` matrix.
+> `AutofillMatcherTests` matrix. **Both sides are normalized from host-or-URL** before the exact
+> compare (`registrableDomain(forHostOrURL:)`), so a stored `www.` host or a full LastPass sign-in URL
+> still reduces to the same registrable domain (the import stores the bare registrable domain, and
+> `loadItems` self-heals legacy un-normalized hosts) — normalization, not loosening.
 >
 > **Fill.** Inline keyboard-first picker (⌘\\, `AutofillSuggestionView`), shows **title+host only** (no
 > decryption until pick). On pick: biometric gate (`biometricAuthenticateForReveal`, when enabled;
