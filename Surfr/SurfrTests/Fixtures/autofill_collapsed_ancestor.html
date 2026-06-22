@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Sign in</title></head>
+<body>
+  <h1>Sign in</h1>
+  <!-- A real login form, but its container is collapsed to height:0 with overflow:hidden (a common
+       "closed"/animated-away state). The inputs' own boxes are non-zero, but they're clipped away —
+       detection/fill must treat them as not present. -->
+  <div style="height:0;overflow:hidden">
+    <form action="/login">
+      <input id="cuser" type="text" autocomplete="username">
+      <input id="cpass" type="password">
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body>
+</html>

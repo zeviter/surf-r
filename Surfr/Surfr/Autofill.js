@@ -22,10 +22,18 @@
   function isVisible(el) {
     if (!el || el.type === "hidden" || el.disabled || el.readOnly) return false;
     if (!el.getClientRects().length) return false;                 // display:none anywhere / detached
+    // The browser's own composed-tree visibility computation (also catches content-visibility).
+    if (el.checkVisibility && !el.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true })) return false;
     let node = el;
     while (node && node.nodeType === 1) {
       const s = getComputedStyle(node);
       if (s.display === "none" || s.visibility === "hidden" || s.visibility === "collapse" || parseFloat(s.opacity || "1") === 0) return false;
+      // An ancestor collapsed to zero in a clipped axis (e.g. height:0;overflow:hidden — a common
+      // close/animation pattern) hides its subtree even though the field's own box is non-zero.
+      // `display:contents` boxes have no geometry but DO render children — never exclude on those.
+      if (node !== el && s.display !== "contents") {
+        if ((node.offsetHeight === 0 && s.overflowY !== "visible") || (node.offsetWidth === 0 && s.overflowX !== "visible")) return false;
+      }
       const parent = node.parentNode;
       node = (parent instanceof ShadowRoot) ? parent.host : parent;   // cross the shadow boundary
     }

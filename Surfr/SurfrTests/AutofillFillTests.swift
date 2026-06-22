@@ -131,6 +131,19 @@ extension AutofillFillTests {
         XCTAssertEqual(onDemand?["hasUsername"] as? Bool, false)
     }
 
+    /// General hardening: a login form inside a height:0;overflow:hidden container (a common
+    /// closed/animated-away state) is clipped away — detection/fill must treat it as not present, even
+    /// though the inputs' own boxes are non-zero.
+    func test_collapsedAncestor_offersAndFillsNothing() async throws {
+        let (webView, handler) = try await load("autofill_collapsed_ancestor.html", at: "https://example.com/login")
+        XCTAssertEqual(handler.lastDetected?["hasPassword"] as? Bool, false, "collapsed (clipped) container → no field present")
+        XCTAssertEqual(handler.lastDetected?["hasUsername"] as? Bool, false)
+        _ = try await webView.callAsyncJavaScript("return await __surfrFill(username, password)",
+                                                  arguments: ["username": "x", "password": "leak"], in: nil, contentWorld: Self.testWorld)
+        let pass = (try await webView.evaluateJavaScript("document.getElementById('cpass').value", in: nil, contentWorld: Self.testWorld) as? String) ?? "<nil>"
+        XCTAssertEqual(pass, "", "must never fill a clipped-away field")
+    }
+
     /// The Barbican "closed popup" bug: a shadow-DOM login whose host is display:none (popup closed but
     /// not removed). Composed-tree visibility must treat the fields as not present → no detection, and
     /// __surfrFill targets nothing (the shadow password stays empty). State 3 behaves like state 1.
