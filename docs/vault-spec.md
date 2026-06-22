@@ -292,6 +292,22 @@ Two modes; entropy shown live; length does the work rather than arbitrary compos
 - Both modes show a **live entropy estimate (bits)** + a strength meter (zxcvbn-style). CryptoKit CSPRNG;
   the word list is **bundled (no network)**.
 
+> **Slice 6 as-built.** Pure logic in **SurfrCore** (`PasswordGenerator.swift`), UI inline in the
+> add/edit form (`GeneratorView.swift` popover; no standalone surface). **Entropy is computed
+> directly** (`length × log2(poolSize)`; passphrase `words × log2(7776)`) rather than zxcvbn-estimated
+> — we control the generation process, so it's exact; the "≥1 of each class" guarantee makes the
+> random figure a documented **<1-bit overestimate**. Strength bands by bits: **<40 Weak · 40–60 Fair
+> · 60–80 Strong · 80+ Excellent**. **Randomness:** `SecRandomCopyBytes` (CryptoKit exposes no
+> integer RNG — its randomness *is* the system CSPRNG) with **rejection sampling** for unbiased
+> indices; the guaranteed-placement Fisher–Yates shuffle uses the **same** unbiased index (no bias
+> reintroduced at shuffle time). **Random:** length 8–64 (default 20); symbol set
+> `!@#$%^&*()-_=+[]{};:,.?/` (no quotes/backslash/space, for paste/parse robustness); exclude-ambiguous
+> set `0 O o l I 1 |`; the UI **prevents disabling the last character class** (visible message, not a
+> silent re-enable). **Diceware:** 4–10 words (default 6), separators hyphen/period/underscore/space,
+> capitalization none/Title/random-word. **EFF large wordlist** (7776 words) bundled as a SurfrCore
+> SwiftPM resource (`Bundle.module`), **CC-BY 3.0** (attribution in
+> `SurfrCore/EFF_WORDLIST_LICENSE.md`); the loader **fails loud** if the count isn't exactly 7776.
+
 ---
 
 ## 9. TOTP handling
@@ -458,12 +474,13 @@ Six forks to confirm before slicing. Recommendation noted on each; none blocks s
   > deliberate, narrow exception to "single `Surfr` target until extraction": **only the vault crypto
   > moves in now**; store/lock/UI and everything else stay in the `Surfr` target until Phase 6. The
   > app target links the package when later slices need it.
-  > **Slice 2/5/7 amendment.** `VaultStore.swift` (Slice 2), and the **TOTP/`otpauth`/Base32/
+  > **Slice 2/5/6/7 amendment.** `VaultStore.swift` (Slice 2), the **generator** (Slice 6, in
+  > `PasswordGenerator.swift` + the bundled EFF wordlist resource), and the **TOTP/`otpauth`/Base32/
   > `otpauth-migration` decoder** (Slice 7, in `TOTP.swift` + `OTPMigration.swift`) **also live in
   > `SurfrCore`** — they're pure, headless, and testable via `swift test` (RFC-6238 vectors, the
-  > migration protobuf). `LoginPayload` is import-clean in the app target for now, relocating to
-  > `SurfrCore` with the AutoFill extension (Slice 10). UI (incl. `VaultItemView`, the import flows)
-  > stays in the app target.
+  > migration protobuf, generator entropy + unbiased-index stats). `LoginPayload` is import-clean in
+  > the app target for now, relocating to `SurfrCore` with the AutoFill extension (Slice 10). UI
+  > (incl. `VaultItemView`, the import flows, `GeneratorView`) stays in the app target.
 - Written **import-clean** (no AppKit/SwiftUI/WebKit in crypto/store/lock layers) to ease the future
   `SurfrCore` move, consistent with `spec.md` §6 Phase 6 / §8.
 - **No secrets in the repo**; respect `.gitignore`; stop and warn if a secret is staged.
