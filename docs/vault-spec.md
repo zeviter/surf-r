@@ -341,6 +341,14 @@ Two distinct fill paths, sharing the vault but driven differently.
 >   matching, retries once after ~350ms if fields are present but unmatched, and (DEBUG) logs detected
 >   origin→registrable-domain vs vault domains so any residual race is visible. The push observer
 >   remains for the live affordance.
+> - **Offer/fill require a REAL login form (anti-phishing gate).** Host match alone never offers or
+>   fills — a credential surfaces only when detection finds an actual visible login field on the
+>   host-matched page. Username-only (two-step) corroboration is **page/form-anchored**: a login
+>   URL/title, the field's own form posting to a login endpoint, or a sign-in **heading** (h1/h2/legend)
+>   — explicitly **not** a page-level "Log in" button/link (every home page has one; using button text
+>   corroborated a home page's search box as a username field). **Search/query boxes are excluded** from
+>   detection and fill. So a home page with a "Log in" button + search box offers nothing, and fill only
+>   ever targets detected login fields — proven by `test_homePage_loginButtonAndSearch_offersAndFillsNothing`.
 
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)
