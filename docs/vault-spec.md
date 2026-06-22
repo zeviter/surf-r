@@ -320,6 +320,20 @@ Two distinct fill paths, sharing the vault but driven differently.
 > password. Cross-page auto-complete (remember the pick, auto-fill page 2) is deliberately deferred.
 > The "no candidates" message distinguishes a **detection** miss ("No login field detected") from a
 > **match** miss ("No saved login matches this page") so failures are diagnosable.
+>
+> **8c follow-ups (purely structural — no site-specific code anywhere in detection):**
+> - **Shadow-DOM popups.** Detection/fill now **pierce open shadow roots** (`deepQueryAll`) — a login
+>   popup that is a web component (password input inside a shadow root) is correctly seen as
+>   **single-page** (password present), not mislabeled username-first. Closed shadow roots remain
+>   inaccessible (documented). The single rule stays structural: *visible password field present →
+>   single-page (fill both); username only, no password anywhere → two-step.*
+> - **Same-origin frame split.** If a username and password for one origin live in different frames, the
+>   controller **prefers the password signal** (a later username-only report can't overwrite a password
+>   context) so it's not mislabeled two-step.
+> - **Fill auth = reveal/copy policy, exactly.** Setting **off + unlocked → fill immediately, no
+>   prompt**; **on → Touch ID** (refuse if no biometric). No extra prompts beyond the reveal policy.
+> - **⌘\\ on a locked vault** unlocks and then **returns to the page and fills** (no eject into the
+>   vault surface) — same surface-restore family as the Slice-5 nav fixes.
 
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)
