@@ -66,15 +66,20 @@
     return weak.find((el) => loginContext(el)) || null;
   }
 
+  // Compute current detection (structure only) — shared by the pushed observer message and the
+  // on-demand request native makes at ⌘\ press time (so a press never relies on a stale 800ms scan).
+  function snapshot() {
+    const hasPassword = passwordFields().length > 0;
+    return { hasPassword: hasPassword, hasUsername: !hasPassword && usernameCandidate() !== null };
+  }
+
+  // Invoked by native at ⌘\ press (callAsyncJavaScript) for a FRESH read of this frame, right now.
+  globalThis.__surfrDetect = function () { return snapshot(); };
+
   // STRUCTURE ONLY — no values.
   function detect() {
-    const hasPassword = passwordFields().length > 0;
-    HANDLER.postMessage({
-      type: "detected",
-      origin: location.origin,
-      hasPassword: hasPassword,
-      hasUsername: !hasPassword && usernameCandidate() !== null
-    });
+    const s = snapshot();
+    HANDLER.postMessage({ type: "detected", origin: location.origin, hasPassword: s.hasPassword, hasUsername: s.hasUsername });
   }
 
   // Username field for a password field: explicit autocomplete=username, else the nearest visible

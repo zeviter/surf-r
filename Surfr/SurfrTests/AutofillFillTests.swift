@@ -124,6 +124,11 @@ extension AutofillFillTests {
             "document.querySelector('login-popup').shadowRoot.getElementById('suser').value", in: nil, contentWorld: Self.testWorld) as? String) ?? "<nil>"
         XCTAssertEqual(pass, "sh4dowP@ss")
         XCTAssertEqual(user, "carol")
+
+        // On-demand detection (the ⌘\-at-press path) sees the shadow password too — same snapshot.
+        let onDemand = try await webView.callAsyncJavaScript("return __surfrDetect()", arguments: [:], in: nil, contentWorld: Self.testWorld) as? [String: Any]
+        XCTAssertEqual(onDemand?["hasPassword"] as? Bool, true)
+        XCTAssertEqual(onDemand?["hasUsername"] as? Bool, false)
     }
 
     /// The proof of conservatism: the SAME bare-email markup as a newsletter (no login context) must

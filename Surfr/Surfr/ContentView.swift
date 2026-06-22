@@ -1547,7 +1547,7 @@ struct ContentView: View {
     #endif
     /// Slice 8a/8c: autofill picker candidates (item + the origin-matched frame + whether the page is
     /// a two-step username-only page, so we fill just the username).
-    @State private var autofillCandidates: [(item: StoredItem, frame: WKFrameInfo, usernameOnly: Bool)] = []
+    @State private var autofillCandidates: [(item: StoredItem, frame: WKFrameInfo?, usernameOnly: Bool)] = []
     /// Transient browser-chrome confirmation (fill / errors), same toast pattern as the vault.
     @State private var browserToast: String?
     /// ⌘\ on a locked vault: after unlocking, stay on the web page and complete the fill instead of
@@ -1860,15 +1860,28 @@ struct ContentView: View {
             NotificationCenter.default.post(name: .openVault, object: nil)
             return
         }
-        let candidates = browser.activeTab.autofill.candidates(items: vault.items)
+        Task { await resolveAutofill() }
+    }
+
+    /// Fresh, on-demand detection + match at ⌘\ press — avoids the race against the 800ms observer scan
+    /// when a shadow-DOM login popup is still settling.
+    private func resolveAutofill() async {
+        let tab = browser.activeTab
+        if vault.items.isEmpty { await vault.loadItems() }          // items race: hydrate before matching
+        await tab.autofill.refreshDetection()                       // detect NOW, not from the last scan
+        var candidates = tab.autofill.candidates(items: vault.items)
+        // Settle-retry: fields present but no match (DOM/origin still settling) → one short re-scan.
+        if candidates.isEmpty, tab.autofill.hasLoginForm {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            await tab.autofill.refreshDetection()
+            candidates = tab.autofill.candidates(items: vault.items)
+        }
+        guard browser.activeTab.id == tab.id else { return }        // user switched tabs meanwhile
         if candidates.isEmpty {
-            // Distinguish the two failure modes so a miss is diagnosable, not opaque:
-            //  • no login field detected → two-step/iframe/dynamic page (not a host-match problem);
-            //  • a form WAS detected but no credential matched → genuine host/credential gap.
-            if browser.activeTab.autofill.hasLoginForm {
+            if tab.autofill.hasLoginForm {
                 showBrowserToast("No saved login matches this page")
                 #if DEBUG
-                print("[Autofill] detected login on \(browser.activeTab.autofill.detectedOrigins) but no vault match")
+                print("[Autofill] no match — \(tab.autofill.matchDiagnostics(items: vault.items))")
                 #endif
             } else {
                 showBrowserToast("No login field detected on this page")
@@ -1880,7 +1893,7 @@ struct ContentView: View {
 
     /// Biometric-gate (when enabled), decrypt, and fill into the origin-matched frame. The decrypted
     /// password is handed to the fill call and not retained by surf-r afterward.
-    private func performFill(item: StoredItem, frame: WKFrameInfo, usernameOnly: Bool) async {
+    private func performFill(item: StoredItem, frame: WKFrameInfo?, usernameOnly: Bool) async {
         autofillCandidates = []
         // Identical policy to reveal/copy (VaultItemDetailModel.authThenPerform): setting OFF + vault
         // unlocked → fill immediately, NO prompt; setting ON → Touch ID. (Master-fallback-for-fill on
