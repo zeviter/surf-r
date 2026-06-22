@@ -305,6 +305,19 @@ Two modes; entropy shown live; length does the work rather than arbitrary compos
   vault is breached. Make it **optional and clearly disclosed**, mark TOTP items so a future setting
   could require a separate unlock, and **never log seeds**.
 
+> **Slice 7 as-built.** RFC-6238 generation (SHA-1/256/512, 6/8 digits) + `otpauth://` parse + Base32
+> live in SurfrCore (`TOTP.swift`), verified against the RFC test vectors. **Google Authenticator
+> migration** is decoded **natively**: `otpauth-migration://offline?data=…` → base64 → a hand-written
+> minimal protobuf reader for `MigrationPayload` (`OTPMigration.swift`, no protobuf dependency) →
+> standard `otpauth://`s. Import sources: **paste** or a **QR decoded from an image** via Vision
+> (`VNDetectBarcodesRequest`) — **no camera entitlement**. **Image hygiene matches the CSV path:** the
+> screenshot is read once under a single security-scoped window, its bytes wiped after decode, decoded
+> secrets dropped after store, and the user is **prompted to delete** the image afterward (never auto;
+> SSD caveat). Multi-entry migration → a preview that **defaults to create-new** and only **offers**
+> an attach to a confidently-matched login (exactly-one match; never silent auto-attach). The live
+> code + countdown ring use `TimelineView(.periodic)` scoped to the open detail — **no background
+> ticking** after navigating away; the secret is cleared on the zero-on-disappear path.
+
 ---
 
 ## 10. UI / UX (wireframe reference)
@@ -445,6 +458,12 @@ Six forks to confirm before slicing. Recommendation noted on each; none blocks s
   > deliberate, narrow exception to "single `Surfr` target until extraction": **only the vault crypto
   > moves in now**; store/lock/UI and everything else stay in the `Surfr` target until Phase 6. The
   > app target links the package when later slices need it.
+  > **Slice 2/5/7 amendment.** `VaultStore.swift` (Slice 2), and the **TOTP/`otpauth`/Base32/
+  > `otpauth-migration` decoder** (Slice 7, in `TOTP.swift` + `OTPMigration.swift`) **also live in
+  > `SurfrCore`** — they're pure, headless, and testable via `swift test` (RFC-6238 vectors, the
+  > migration protobuf). `LoginPayload` is import-clean in the app target for now, relocating to
+  > `SurfrCore` with the AutoFill extension (Slice 10). UI (incl. `VaultItemView`, the import flows)
+  > stays in the app target.
 - Written **import-clean** (no AppKit/SwiftUI/WebKit in crypto/store/lock layers) to ease the future
   `SurfrCore` move, consistent with `spec.md` §6 Phase 6 / §8.
 - **No secrets in the repo**; respect `.gitignore`; stop and warn if a secret is staged.
