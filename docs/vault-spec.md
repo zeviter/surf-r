@@ -349,6 +349,13 @@ Two distinct fill paths, sharing the vault but driven differently.
 >   corroborated a home page's search box as a username field). **Search/query boxes are excluded** from
 >   detection and fill. So a home page with a "Log in" button + search box offers nothing, and fill only
 >   ever targets detected login fields — proven by `test_homePage_loginButtonAndSearch_offersAndFillsNothing`.
+> - **Visibility is computed across the COMPOSED tree (shadow boundaries).** A field can look visible
+>   inside its own shadow root while the popup's shadow host (or any ancestor) is hidden — e.g. a login
+>   popup that's been *closed but only hidden, not removed*. `isVisible` walks field → ancestors →
+>   shadow host → … → document and rejects the field if any node is `display:none` / `visibility:hidden`
+>   / `opacity:0` / zero-size / off-screen. So a closed (hidden-host) popup behaves like no form at all —
+>   no offer, no "filled into invisible fields" (the hidden-field-trap class). Proven by
+>   `test_shadowLogin_hiddenHost_offersAndFillsNothing`.
 
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)
