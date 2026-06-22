@@ -118,6 +118,7 @@ final class VaultGate: ObservableObject {
         try? await store?.wipeAll()
         items = []
         savedVaultQuery = ""; savedVaultOpenItemID = nil
+        UserDefaults.standard.removeObject(forKey: Self.hostRepairFlag)
         pendingMaster?.wipe(); pendingRecovery?.wipe()
         pendingMaster = nil; pendingRecovery = nil; pendingMeta = nil
         reducer = FirstRunReducer()
@@ -282,21 +283,35 @@ final class VaultGate: ObservableObject {
     var savedVaultOpenItemID: UUID?
 
     /// (Re)load the list. Only the cleartext metadata is read; payloads stay encrypted on disk.
+    static let hostRepairFlag = "SurfrVaultHostRepairV2Done"
+
     func loadItems() async {
         guard let store, phase == .unlocked else { items = []; return }
         var loaded = (try? await store.allItems()) ?? []
-        // Self-heal legacy/imported items whose item_hosts weren't reduced to the registrable domain
-        // (e.g. an early LastPass import that stored www.host or a full URL). Cleartext-metadata only,
-        // idempotent — once normalized, re-running changes nothing.
-        var repairedAny = false
+        var changed = false
+
+        // Step 1 — every load, NO decryption: reduce existing item_hosts to the registrable domain
+        // (heals www./full-URL forms). Idempotent: once bare, re-running is a no-op (no DB write).
         for item in loaded {
-            let normalized = Self.normalizedHosts(item.hosts)
-            if normalized.map(\.host) != item.hosts.map(\.host) {
-                try? await store.updateHosts(normalized, forItemID: item.id)
-                repairedAny = true
+            let desired = Self.normalizedHosts(item.hosts)
+            if !desired.isEmpty, desired.map(\.host) != item.hosts.map(\.host) {
+                try? await store.updateHosts(desired, forItemID: item.id); changed = true
             }
         }
-        if repairedAny { loaded = (try? await store.allItems()) ?? loaded }
+
+        // Step 2 — ONCE (flagged): recover a host from the encrypted payload's URLs for items that have
+        // NO item_hosts (an early import where URL parsing failed and stored nothing — e.g. Barbican).
+        // Flagged so hostless items (TOTP-only) aren't decrypted on every subsequent load.
+        if !UserDefaults.standard.bool(forKey: Self.hostRepairFlag) {
+            for item in loaded where item.hosts.isEmpty {
+                guard let payload = decryptPayload(item) else { continue }
+                let desired = Self.normalizedHosts(payload.urls.map { SurfrCore.Host(host: $0, isPrimary: true) })
+                if !desired.isEmpty { try? await store.updateHosts(desired, forItemID: item.id); changed = true }
+            }
+            UserDefaults.standard.set(true, forKey: Self.hostRepairFlag)
+        }
+
+        if changed { loaded = (try? await store.allItems()) ?? loaded }
         items = loaded
     }
 

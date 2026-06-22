@@ -42,10 +42,12 @@ final class VaultItemsTests: XCTestCase {
         tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("surfr-items-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         UserDefaults.standard.removeObject(forKey: "SurfrVaultLastMasterAuth")
+        UserDefaults.standard.removeObject(forKey: VaultGate.hostRepairFlag)   // let the host repair run per test
     }
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: tempDir)
         UserDefaults.standard.removeObject(forKey: "SurfrVaultLastMasterAuth")
+        UserDefaults.standard.removeObject(forKey: VaultGate.hostRepairFlag)
     }
 
     /// Biometric not enabled, so reveal/decrypt paths never trigger a real Touch ID prompt in CI.
@@ -250,6 +252,26 @@ final class VaultItemsTests: XCTestCase {
         XCTAssertEqual(gate.items.first?.hosts.map(\.host), ["amazon.co.uk"])
         await gate.loadItems()   // idempotent — stays normalized
         XCTAssertEqual(gate.items.first?.hosts.map(\.host), ["amazon.co.uk"])
+    }
+
+    /// The Barbican bug: an early import stored NO item_hosts (URL parsing failed), so there was
+    /// nothing to normalize. The repair must recover the host from the encrypted payload's URL.
+    func test_loadItems_recoversHostFromPayload_whenItemHostsEmpty() async {
+        let gate = await unlockedGate()
+        await gate.saveItem(id: nil, title: "Barbican",
+                            payload: LoginPayload(password: "p", urls: ["https://www.barbican.org.uk/whats-on?id=123"]),
+                            hosts: [])   // simulates the broken legacy import: empty item_hosts
+        // Simulate the one-time migration running with this legacy item present.
+        UserDefaults.standard.removeObject(forKey: VaultGate.hostRepairFlag)
+        await gate.loadItems()
+        XCTAssertEqual(gate.items.first?.hosts.map(\.host), ["barbican.org.uk"])
+    }
+
+    /// An item that genuinely has no host and no URL (e.g. a TOTP-only item) must not crash or fabricate.
+    func test_loadItems_hostlessItemStaysHostless() async {
+        let gate = await unlockedGate()
+        await gate.saveItem(id: nil, title: "Code only", payload: LoginPayload(totp: "otpauth://totp/x?secret=JBSWY3DPEHPK3PXP"), hosts: [])
+        XCTAssertEqual(gate.items.first?.hosts.count, 0)
     }
 
     func test_lockClearsItems() async {
