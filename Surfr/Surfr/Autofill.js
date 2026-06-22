@@ -21,8 +21,22 @@
     return s.visibility !== "hidden" && s.display !== "none";
   }
 
+  // Query that pierces OPEN shadow roots (login popups/modals are often web components). Closed roots
+  // remain inaccessible by design — documented limit. Cost is bounded by the detection debounce.
+  function deepQueryAll(selector) {
+    const out = [];
+    function walk(root) {
+      let matches; try { matches = root.querySelectorAll(selector); } catch (e) { matches = []; }
+      for (const m of matches) out.push(m);
+      let all; try { all = root.querySelectorAll("*"); } catch (e) { all = []; }
+      for (const el of all) { if (el.shadowRoot) walk(el.shadowRoot); }
+    }
+    walk(document);
+    return out;
+  }
+
   function passwordFields() {
-    return Array.prototype.filter.call(document.querySelectorAll('input[type="password"]'), isVisible);
+    return deepQueryAll('input[type="password"]').filter(isVisible);
   }
 
   // Login context for the WEAK (bare type=email/text) path: only treat such a field as a login
@@ -40,7 +54,7 @@
   // A username field on a username-FIRST (two-step) page: only when there's NO visible password field.
   function usernameCandidate() {
     if (passwordFields().length) return null;
-    const inputs = Array.prototype.filter.call(document.querySelectorAll("input"), isVisible);
+    const inputs = deepQueryAll("input").filter(isVisible);
     // STRONG, trusted: autocomplete=username / email.
     const strong = inputs.find((el) => {
       const ac = (el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/);
@@ -66,14 +80,13 @@
   // Username field for a password field: explicit autocomplete=username, else the nearest visible
   // text-ish input preceding it in DOM order (same form if any).
   function usernameFor(pw) {
-    const scope = pw.form || document;
     const sel = 'input[autocomplete="username"], input[type="text"], input[type="email"], input[type="tel"], input:not([type])';
-    const fields = Array.prototype.filter.call(scope.querySelectorAll(sel), isVisible);
-    const explicit = fields.find((el) => el.autocomplete === "username");
+    const fields = deepQueryAll(sel).filter(isVisible);
+    const explicit = fields.find((el) => (el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/).includes("username"));
     if (explicit) return explicit;
     let best = null;
     for (const el of fields) {
-      if (pw.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) best = el;
+      try { if (pw.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) best = el; } catch (e) { /* cross-root */ }
     }
     return best || fields[0] || null;
   }

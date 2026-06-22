@@ -1550,6 +1550,9 @@ struct ContentView: View {
     @State private var autofillCandidates: [(item: StoredItem, frame: WKFrameInfo, usernameOnly: Bool)] = []
     /// Transient browser-chrome confirmation (fill / errors), same toast pattern as the vault.
     @State private var browserToast: String?
+    /// ⌘\ on a locked vault: after unlocking, stay on the web page and complete the fill instead of
+    /// ejecting into the vault surface.
+    @State private var fillAfterUnlock = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1853,7 +1856,7 @@ struct ContentView: View {
         showSpotlight = false
         guard browser.activeTab.kind == .web else { return }
         guard vault.phase == .unlocked else {
-            showBrowserToast("Unlock the vault to fill")
+            fillAfterUnlock = true   // after unlock, return here and fill — don't eject into the vault
             NotificationCenter.default.post(name: .openVault, object: nil)
             return
         }
@@ -1879,10 +1882,17 @@ struct ContentView: View {
     /// password is handed to the fill call and not retained by surf-r afterward.
     private func performFill(item: StoredItem, frame: WKFrameInfo, usernameOnly: Bool) async {
         autofillCandidates = []
-        // Per-action auth mirrors the reveal gate; biometric only when actually enabled (the vault is
-        // already unlocked). Master-fallback-for-fill on non-biometric Macs is a documented follow-on.
-        if vault.requireAuthToReveal && vault.biometricState == .enabled {
-            guard await vault.biometricAuthenticateForReveal() else { return }
+        // Identical policy to reveal/copy (VaultItemDetailModel.authThenPerform): setting OFF + vault
+        // unlocked → fill immediately, NO prompt; setting ON → Touch ID. (Master-fallback-for-fill on
+        // non-biometric Macs is a documented follow-on; with auth required and no biometric we refuse
+        // rather than fill unauthenticated.)
+        if vault.requireAuthToReveal {
+            if vault.biometricState == .enabled {
+                guard await vault.biometricAuthenticateForReveal() else { return }
+            } else {
+                showBrowserToast("Enable Touch ID, or turn off “Require auth to reveal/copy”, to fill")
+                return
+            }
         }
         guard let payload = vault.decryptPayload(item) else { showBrowserToast("Couldn’t decrypt login"); return }
         let name = item.title.isEmpty ? "login" : item.title
@@ -1918,6 +1928,12 @@ struct ContentView: View {
         // just-opened vault shut — the "first open kicks me out" bug.
         guard showVault else { return }
         showVault = false
+        // ⌘\-triggered unlock: stay on the web page and complete the fill instead of opening the vault.
+        if fillAfterUnlock {
+            fillAfterUnlock = false
+            if vault.isUnlocked { DispatchQueue.main.async { summonAutofill() } }
+            return
+        }
         // Navigate to the vault surface only if we're not already on it. Unlocking from the locked
         // card happens *on* the vault tab — calling openVaultPage() there would toggle/eject it (the
         // lock→unlock kick-out). Lock/unlock are within-surface state changes; stay put.

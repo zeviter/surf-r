@@ -60,9 +60,17 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
     private func update(scheme: String, host: String, hasPassword: Bool, hasUsername: Bool, frame: WKFrameInfo) {
         guard !host.isEmpty else { return }
         let key = "\(scheme)://\(host)"
-        if hasPassword || hasUsername {
-            contexts[key] = FrameContext(frame: frame, scheme: scheme, host: host, hasPassword: hasPassword, hasUsername: hasUsername)
-        } else {
+        // Prefer the PASSWORD signal: when a username and a password field for the same origin live in
+        // different frames (e.g. a same-origin login iframe), a later username-only report must not
+        // overwrite the password context — that's exactly what mislabels a single-page login as
+        // two-step. A bare "nothing here" report only clears a non-password context.
+        if hasPassword {
+            contexts[key] = FrameContext(frame: frame, scheme: scheme, host: host, hasPassword: true, hasUsername: hasUsername)
+        } else if hasUsername {
+            if contexts[key]?.hasPassword != true {
+                contexts[key] = FrameContext(frame: frame, scheme: scheme, host: host, hasPassword: false, hasUsername: true)
+            }
+        } else if contexts[key]?.hasPassword != true {
             contexts.removeValue(forKey: key)
         }
         hasLoginForm = !contexts.isEmpty

@@ -109,6 +109,23 @@ extension AutofillFillTests {
         XCTAssertEqual(value, "bob@example.com")
     }
 
+    /// The Barbican class of bug: a login popup whose fields live in an OPEN shadow root. Detection
+    /// must pierce the shadow root and see the password → single-page (hasPassword, NOT username-first)
+    /// → __surfrFill fills both shadow fields.
+    func test_shadowDomLogin_detectedAsSinglePage_andFills() async throws {
+        let (webView, handler) = try await load("autofill_shadow_login.html", at: "https://example.com/")
+        XCTAssertEqual(handler.lastDetected?["hasPassword"] as? Bool, true, "password in shadow root must be detected")
+        XCTAssertEqual(handler.lastDetected?["hasUsername"] as? Bool, false, "single-page, not two-step")
+        _ = try await webView.callAsyncJavaScript("return await __surfrFill(username, password)",
+                                                  arguments: ["username": "carol", "password": "sh4dowP@ss"], in: nil, contentWorld: Self.testWorld)
+        let pass = (try await webView.evaluateJavaScript(
+            "document.querySelector('login-popup').shadowRoot.getElementById('spass').value", in: nil, contentWorld: Self.testWorld) as? String) ?? "<nil>"
+        let user = (try await webView.evaluateJavaScript(
+            "document.querySelector('login-popup').shadowRoot.getElementById('suser').value", in: nil, contentWorld: Self.testWorld) as? String) ?? "<nil>"
+        XCTAssertEqual(pass, "sh4dowP@ss")
+        XCTAssertEqual(user, "carol")
+    }
+
     /// The proof of conservatism: the SAME bare-email markup as a newsletter (no login context) must
     /// NOT be treated as a login — no detection, and __surfrFillUsername fills nothing.
     func test_newsletter_noContext_doesNotDetectOrFill() async throws {
