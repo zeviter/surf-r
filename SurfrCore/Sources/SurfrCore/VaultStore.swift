@@ -175,6 +175,17 @@ public final class VaultStore: Sendable {
         }
     }
 
+    /// Replace an item's `item_hosts` rows (cleartext metadata; no key needed). Used by the host
+    /// normalization/repair pass for legacy imports.
+    public func updateHosts(_ hosts: [Host], forItemID id: UUID) async throws {
+        try await dbQueue.write { db in
+            try HostRow.filter(Column("item_id") == id.uuidString).deleteAll(db)
+            for host in hosts {
+                try HostRow(itemId: id.uuidString, host: host.host, isPrimary: host.isPrimary).insert(db)
+            }
+        }
+    }
+
     /// Delete an item; its `item_hosts` / `audit_cache` rows cascade.
     public func deleteItem(id: UUID) async throws {
         _ = try await dbQueue.write { db in try ItemRow.deleteOne(db, key: id.uuidString) }

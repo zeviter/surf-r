@@ -75,6 +75,13 @@ final class CSVImportTests: XCTestCase {
         }
     }
 
+    func test_host_messyURL_reducesToRegistrableDomain() {
+        // A full LastPass sign-in URL (query/fragment/messy) must reduce to the bare registrable domain.
+        XCTAssertEqual(CSVImport.host(from: "https://www.amazon.co.uk/ap/signin?openid.return_to=https://www.amazon.co.uk/&x=y"), "amazon.co.uk")
+        XCTAssertEqual(CSVImport.host(from: "www.github.com"), "github.com")
+        XCTAssertEqual(CSVImport.host(from: "https://accounts.google.com/signin"), "google.com")
+    }
+
     func test_headerOnly_throwsNoDataRows() {
         let csv = "url,username,password,totp,extra,name,grouping,fav\n"
         XCTAssertThrowsError(try CSVImport.parse(data: Data(csv.utf8))) { error in

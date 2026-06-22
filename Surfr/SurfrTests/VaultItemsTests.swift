@@ -240,6 +240,18 @@ final class VaultItemsTests: XCTestCase {
         XCTAssertTrue(TOTPImportCoordinator.decodeTOTPs(from: "not a uri").isEmpty)
     }
 
+    /// Migration/repair: an item stored with an un-normalized host (legacy LastPass import) is healed
+    /// to its registrable domain on load, so autofill matching works.
+    func test_loadItems_repairsLegacyHosts() async {
+        let gate = await unlockedGate()
+        await gate.saveItem(id: nil, title: "Amazon", payload: LoginPayload(password: "p"),
+                            hosts: [SurfrCore.Host(host: "www.amazon.co.uk", isPrimary: true)])
+        // saveItem → loadItems self-heals www.amazon.co.uk → amazon.co.uk (and persists it).
+        XCTAssertEqual(gate.items.first?.hosts.map(\.host), ["amazon.co.uk"])
+        await gate.loadItems()   // idempotent — stays normalized
+        XCTAssertEqual(gate.items.first?.hosts.map(\.host), ["amazon.co.uk"])
+    }
+
     func test_lockClearsItems() async {
         let gate = await unlockedGate()
         await gate.saveItem(id: nil, title: "X", payload: LoginPayload(password: "p"), hosts: [])

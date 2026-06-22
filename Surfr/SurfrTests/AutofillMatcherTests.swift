@@ -64,6 +64,16 @@ final class AutofillMatcherTests: XCTestCase {
         XCTAssertEqual(titles, ["New", "Mid", "Old"])
     }
 
+    // The reported bug: page www.amazon.co.uk + a stored www./full-URL host must still match
+    // amazon.co.uk (both sides reduce to the registrable domain).
+    func test_normalizedHosts_match_butAntiLeakIntact() {
+        XCTAssertTrue(offers("https", "www.amazon.co.uk", "www.amazon.co.uk"))
+        XCTAssertTrue(offers("https", "www.amazon.co.uk", "https://www.amazon.co.uk/ap/signin?openid.return_to=x"))
+        XCTAssertTrue(offers("https", "amazon.co.uk", "www.amazon.co.uk"))
+        // A path that merely mentions the domain on a different host must NOT match.
+        XCTAssertFalse(offers("https", "www.amazon.co.uk", "https://evil.com/amazon.co.uk"))
+    }
+
     func test_hostsMatch_unit() {
         XCTAssertTrue(AutofillMatcher.hostsMatch("a.example.com", "b.example.com"))
         XCTAssertFalse(AutofillMatcher.hostsMatch("example.com", "evil-example.com"))

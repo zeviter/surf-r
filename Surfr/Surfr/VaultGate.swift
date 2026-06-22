@@ -284,7 +284,33 @@ final class VaultGate: ObservableObject {
     /// (Re)load the list. Only the cleartext metadata is read; payloads stay encrypted on disk.
     func loadItems() async {
         guard let store, phase == .unlocked else { items = []; return }
-        items = (try? await store.allItems()) ?? []
+        var loaded = (try? await store.allItems()) ?? []
+        // Self-heal legacy/imported items whose item_hosts weren't reduced to the registrable domain
+        // (e.g. an early LastPass import that stored www.host or a full URL). Cleartext-metadata only,
+        // idempotent — once normalized, re-running changes nothing.
+        var repairedAny = false
+        for item in loaded {
+            let normalized = Self.normalizedHosts(item.hosts)
+            if normalized.map(\.host) != item.hosts.map(\.host) {
+                try? await store.updateHosts(normalized, forItemID: item.id)
+                repairedAny = true
+            }
+        }
+        if repairedAny { loaded = (try? await store.allItems()) ?? loaded }
+        items = loaded
+    }
+
+    /// Reduce each host to its registrable domain (from host-or-URL) and de-duplicate, preserving the
+    /// primary flag. Shared by the loadItems repair pass.
+    static func normalizedHosts(_ hosts: [SurfrCore.Host]) -> [SurfrCore.Host] {
+        var seen = Set<String>()
+        var out: [SurfrCore.Host] = []
+        for h in hosts {
+            let domain = TrustStore.registrableDomain(forHostOrURL: h.host)
+            guard !domain.isEmpty, seen.insert(domain).inserted else { continue }
+            out.append(SurfrCore.Host(host: domain, isPrimary: h.isPrimary))
+        }
+        return out
     }
 
     /// Decrypt ONE item's payload (detail view), via the unlocked vault key. Returns nil if locked /

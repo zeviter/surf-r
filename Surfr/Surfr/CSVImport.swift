@@ -131,11 +131,13 @@ enum CSVImport {
             .max { $0.signature.count < $1.signature.count }
     }
 
+    /// Store the **registrable domain** for an imported credential's URL — robustly, even when the
+    /// LastPass `url` is a full sign-in URL with query/fragment that `URL(string:)` can't parse. Keeps
+    /// `item_hosts` clean (`amazon.co.uk`, never `www.amazon.co.uk` or a full URL) so matching is exact.
     static func host(from urlString: String) -> String? {
         let trimmed = urlString.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return nil }
-        let withScheme = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
-        guard let host = URL(string: withScheme)?.host, !host.isEmpty else { return nil }
-        return host.lowercased()
+        let domain = TrustStore.registrableDomain(forHostOrURL: trimmed)
+        return domain.isEmpty ? nil : domain
     }
 }

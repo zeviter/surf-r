@@ -155,6 +155,24 @@ final class TrustStore: ObservableObject {
         return heuristicRegistrableDomain(h)
     }
 
+    /// Registrable domain from a value that may be a bare host, `host:port`, or a full URL (with
+    /// scheme / path / query / userinfo). Robustly extracts the host first, then reduces. Used wherever
+    /// stored credential hosts (which may be messy LastPass-imported URLs) must reduce to the same
+    /// registrable domain as a live page origin — keeping the match exact, not fuzzy.
+    static func registrableDomain(forHostOrURL value: String) -> String {
+        registrableDomain(for: hostComponent(from: value))
+    }
+
+    /// Extract the bare host from a host/URL string (drop scheme, path/query/fragment, userinfo, port).
+    static func hostComponent(from value: String) -> String {
+        var s = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let r = s.range(of: "://") { s = String(s[r.upperBound...]) }                  // drop scheme
+        if let i = s.firstIndex(where: { $0 == "/" || $0 == "?" || $0 == "#" }) { s = String(s[..<i]) } // authority only
+        if let at = s.lastIndex(of: "@") { s = String(s[s.index(after: at)...]) }         // drop userinfo
+        if let colon = s.lastIndex(of: ":") { s = String(s[..<colon]) }                   // drop port
+        return s.lowercased()
+    }
+
     /// Pre-PSL fallback: common multi-label suffixes via a small embedded set, else
     /// the last two labels.
     private static func heuristicRegistrableDomain(_ host: String) -> String {
