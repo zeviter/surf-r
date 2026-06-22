@@ -64,6 +64,30 @@
 - ☐ **Print / Print-to-PDF `⌘P`.** Reuses the `NSPrintOperation` path already touched for the
   Recovery Kit.
 
+## C3. In-browser document view + edit (post-v1 — investigate best-in-class before building, NOT scheduled)
+
+> Two distinct future feature streams. **Scope only — do not design or slice yet.** Both sit **after v1
+> (Slices 9–10)** unless reprioritised. Each needs a "survey best-in-class first" investigation before
+> any build.
+
+- ☐ **(A) Markdown editor — view + edit `.md`.** Editor surface + live preview + save-back. surf-r
+  already *renders* markdown (markdownviewer / `.md` downloads); this is the contained next step.
+  **Open questions for design time:** CommonMark vs GFM scope (tables / task-lists / footnotes);
+  code-fence syntax highlighting; in-place save vs export; where the editor lives (internal
+  `PageScaffold` surface vs dedicated pane). Low–moderate complexity; **no privacy seam** (local text
+  in/out).
+- ☐ **(B) PDF view + annotate / fill / sign / redact.** View, annotate, fill form fields, sign, and
+  redact PDFs in-browser. Likely **Apple PDFKit** (`PDFView` / `PDFAnnotation` / form fields) per the
+  Apple-native principle — covers view/annotate/fill cheaply. **Two research-worthy hard parts flagged
+  for the investigation:** (1) **redaction must be TRUE redaction** — remove content from the PDF
+  content stream, not draw a box over still-extractable text; naïve box-over-text is a well-known
+  data-leak failure and would violate surf-r's "structural, not aspirational" privacy stance, so if
+  redaction ships it must genuinely remove the data or not claim the word; (2) **"sign" needs a scope
+  decision** — visual/drawn signature (image stamp, easy) vs. cryptographic digital signature
+  (PKI/certificate, tamper-evident, much harder) — pick at design time. Moderate–high complexity
+  (redaction + crypto-signing are the research parts). Exported/generated docs as **PDF openable in
+  Chrome** (per user pref).
+
 ## D. Known limitations (documented; by-design or low priority)
 
 - **Schemeless single-label hosts** (e.g. `intranet`, `devbox:3000`) parse as searches — workaround
