@@ -39,8 +39,21 @@ enum AutofillBridge {
 final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandler {
     struct FrameContext { let frame: WKFrameInfo?; let scheme: String; let host: String; let hasPassword: Bool; let hasUsername: Bool }
 
+    /// A fillable field's main-frame viewport rect + kind (8e) — GENERIC geometry, no vault data.
+    struct FieldAnchor: Identifiable, Equatable {
+        var id: String { kind }
+        let kind: String   // "username" | "password"
+        let x, y, w, h: Double
+    }
+
     /// Drives the UI affordance (a login form matching some credential exists on this page).
     @Published private(set) var hasLoginForm = false
+    /// Main-frame fillable-field anchors for the per-field key overlay (8e).
+    @Published private(set) var fieldAnchors: [FieldAnchor] = []
+    /// True while the page is scrolling — the native overlay hides (can't track async scroll smoothly).
+    @Published private(set) var scrolling = false
+    /// Field kinds surf-r just filled → their icons latch green ("we filled this", not auth state).
+    @Published private(set) var filledFieldKinds: Set<String> = []
 
     private var contexts: [String: FrameContext] = [:]   // keyed by "scheme://host"; frame nil = main frame
     weak var webView: WKWebView?
@@ -52,18 +65,29 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
             let body = message.body as? [String: Any]
             // Save-on-submit (8b): the captured login credential — HTTPS only, native frame origin
             // (a page can't spoof its own origin). Routed to the shared save coordinator.
-            if body?["type"] as? String == "submitted" {
+            switch body?["type"] as? String {
+            case "submitted":
                 guard origin.protocol == "https", !origin.host.isEmpty else { return }
                 AutofillSaveCoordinator.shared.handleSubmit(
                     host: origin.host,
                     username: body?["username"] as? String ?? "",
                     password: body?["password"] as? String ?? "")
                 return
+            case "scrolling":
+                if message.frameInfo.isMainFrame { scrolling = true }
+                return
+            case "anchors":
+                if message.frameInfo.isMainFrame { fieldAnchors = Self.parseAnchors(body); scrolling = false }
+                return
+            default:
+                break   // "detected"
             }
             update(scheme: origin.protocol, host: origin.host,
                    hasPassword: body?["hasPassword"] as? Bool ?? false,
                    hasUsername: body?["hasUsername"] as? Bool ?? false,
                    frame: message.frameInfo.isMainFrame ? nil : message.frameInfo)
+            // Only the main frame's anchors are in the overlay's coordinate space.
+            if message.frameInfo.isMainFrame { fieldAnchors = Self.parseAnchors(body); scrolling = false }
         }
     }
 
@@ -110,10 +134,25 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
     /// Origins of frames that reported a login form — for diagnosing match misses.
     var detectedOrigins: [String] { contexts.values.map { "\($0.scheme)://\($0.host)" } }
 
-    /// Reset on navigation (stale frames/origins should not linger).
+    private static func parseAnchors(_ body: [String: Any]?) -> [FieldAnchor] {
+        guard let raw = body?["anchors"] as? [[String: Any]] else { return [] }
+        return raw.compactMap { d in
+            guard let kind = d["kind"] as? String,
+                  let x = (d["x"] as? NSNumber)?.doubleValue, let y = (d["y"] as? NSNumber)?.doubleValue,
+                  let w = (d["w"] as? NSNumber)?.doubleValue, let h = (d["h"] as? NSNumber)?.doubleValue else { return nil }
+            return FieldAnchor(kind: kind, x: x, y: y, w: w, h: h)
+        }
+    }
+
+    func markFilled(_ kinds: Set<String>) { filledFieldKinds.formUnion(kinds) }
+
+    /// Reset on navigation (stale frames/origins/anchors/green-state should not linger).
     func reset() {
         contexts.removeAll()
         hasLoginForm = false
+        fieldAnchors = []
+        scrolling = false
+        filledFieldKinds = []
     }
 
     /// Matched credentials across detected login frames (deduped), each with the frame to fill (nil =
@@ -139,21 +178,34 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
         return "detected=\(detected) vaultDomains=\(vault) items=\(items.count)"
     }
 
-    /// Fill username + password into a specific origin-matched frame (nil = main frame).
-    func fill(username: String, password: String, into frame: WKFrameInfo?) async {
-        guard let webView else { return }
-        _ = try? await webView.callAsyncJavaScript(
+    /// Fill username + password into a specific origin-matched frame (nil = main frame). Returns the
+    /// field kinds actually filled (→ their icons latch green).
+    @discardableResult
+    func fill(username: String, password: String, into frame: WKFrameInfo?) async -> Set<String> {
+        guard let webView else { return [] }
+        let result = try? await webView.callAsyncJavaScript(
             AutofillBridge.fillInvocation,
             arguments: ["username": username, "password": password],
             in: frame, contentWorld: AutofillBridge.world)
+        return Self.filledKinds(from: result)
     }
 
     /// Fill ONLY the username (two-step page-1) — no password sent to the page.
-    func fillUsername(_ username: String, into frame: WKFrameInfo?) async {
-        guard let webView else { return }
-        _ = try? await webView.callAsyncJavaScript(
+    @discardableResult
+    func fillUsername(_ username: String, into frame: WKFrameInfo?) async -> Set<String> {
+        guard let webView else { return [] }
+        let result = try? await webView.callAsyncJavaScript(
             AutofillBridge.fillUsernameInvocation,
             arguments: ["username": username],
             in: frame, contentWorld: AutofillBridge.world)
+        return Self.filledKinds(from: result)
+    }
+
+    private static func filledKinds(from result: Any?) -> Set<String> {
+        guard let d = result as? [String: Any] else { return [] }
+        var kinds = Set<String>()
+        if d["filledUsername"] as? Bool == true { kinds.insert("username") }
+        if d["filledPassword"] as? Bool == true { kinds.insert("password") }
+        return kinds
     }
 }

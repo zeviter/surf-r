@@ -34,6 +34,47 @@ struct LoginKeyBadge: View {
     }
 }
 
+/// Per-field click-to-fill key icons (Slice 8e), drawn in surf-r's **native chrome** over the web
+/// view at each fillable field's rect — NOT in page DOM (the page can't query or observe it; reuses
+/// the rail-badge privacy property the in-DOM approach would lose). Generic key glyph only — no vault
+/// data. Hidden while scrolling (a native overlay can't track WebKit's async scroll); re-anchors on
+/// settle. Amber = available; green = surf-r filled this field (a fact we own, not auth state).
+struct FieldKeyOverlay: View {
+    @ObservedObject var controller: AutofillController
+    @EnvironmentObject private var vault: VaultGate
+    let onFill: () -> Void
+
+    private var available: Bool {
+        vault.phase == .unlocked && !controller.candidates(items: vault.items).isEmpty
+    }
+
+    var body: some View {
+        if available, !controller.scrolling {
+            ForEach(controller.fieldAnchors) { anchor in
+                FieldKeyIcon(filled: controller.filledFieldKinds.contains(anchor.kind), action: onFill)
+                    .position(x: anchor.x + anchor.w - 11, y: anchor.y + anchor.h / 2)
+            }
+        }
+    }
+}
+
+struct FieldKeyIcon: View {
+    let filled: Bool
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "key.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white)
+                .padding(4)
+                .background(Circle().fill(filled ? Color.green : Color.orange))
+                .shadow(radius: 1, y: 0.5)
+        }
+        .buttonStyle(.plain)
+        .help(filled ? "surf-r filled this field" : "Saved login available — click to fill (⌘\\)")
+    }
+}
+
 /// surf-r's own inline credential picker (WF-7) — keyboard-first, summoned by ⌘\. Shows title + host
 /// only (no decryption until the user picks and passes the biometric gate). Up/Down to choose, Return
 /// to fill, Esc to dismiss.

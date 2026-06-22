@@ -1207,12 +1207,15 @@ struct RailView: View {
                             // Addition 1: right-click close-all for this host group.
                             onCloseHost: { browser.closeHost(group.host) }
                         )
-                        // 8d: clickable "saved login available" key on the active web host's tile —
-                        // bottom-leading (trust/insecure use top-trailing, count bottom-trailing).
+                        // 8d/8e: host-level "saved login available" key on the tile — shown on ANY tab
+                        // state (not just active), driven by the host's representative web tab.
+                        // Bottom-leading (trust/insecure top-trailing, count bottom-trailing).
                         .overlay(alignment: .bottomLeading) {
-                            if group.isActive, browser.activeTab.kind == .web {
-                                LoginKeyBadge(controller: browser.activeTab.autofill) {
-                                    NotificationCenter.default.post(name: .fillCredential, object: nil)
+                            if let repTab = browser.tabs.first(where: { $0.id == group.representativeTabID }),
+                               repTab.kind == .web {
+                                LoginKeyBadge(controller: repTab.autofill) {
+                                    browser.activeTabID = repTab.id   // switch to it, then fill
+                                    DispatchQueue.main.async { NotificationCenter.default.post(name: .fillCredential, object: nil) }
                                 }
                                 .offset(x: 1, y: -1)
                             }
@@ -1579,6 +1582,14 @@ struct ContentView: View {
                                  focusToken: newTabFocusToken)
                     .id(browser.activeTabID)
 
+                // 8e: per-field click-to-fill key icons, native overlay over the web view (not page
+                // DOM). Top-leading origin so anchor viewport coords map directly.
+                if browser.activeTab.kind == .web {
+                    FieldKeyOverlay(controller: browser.activeTab.autofill) { summonAutofill() }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .allowsHitTesting(true)
+                }
+
                 // Context A: the summoned overlay, over the dimmed page. The
                 // per-summon token id forces a fresh field + focus each time.
                 if showSpotlight {
@@ -1907,6 +1918,10 @@ struct ContentView: View {
             } else {
                 showBrowserToast("No login field detected on this page")
             }
+        } else if candidates.count == 1 {
+            // Exactly one match → fill directly (no picker); ⌘\, rail badge, and field icon all share this.
+            let c = candidates[0]
+            await performFill(item: c.item, frame: c.frame, usernameOnly: c.usernameOnly)
         } else {
             autofillCandidates = candidates
         }
@@ -1932,10 +1947,12 @@ struct ContentView: View {
         let name = item.title.isEmpty ? "login" : item.title
         if usernameOnly {
             // Two-step page 1: fill only the username; the password is NOT sent to the page yet.
-            await browser.activeTab.autofill.fillUsername(payload.username, into: frame)
+            let kinds = await browser.activeTab.autofill.fillUsername(payload.username, into: frame)
+            browser.activeTab.autofill.markFilled(kinds)   // latch the field icon green
             showBrowserToast("Filled username — continue, then ⌘\\ for the password")
         } else {
-            await browser.activeTab.autofill.fill(username: payload.username, password: payload.password, into: frame)
+            let kinds = await browser.activeTab.autofill.fill(username: payload.username, password: payload.password, into: frame)
+            browser.activeTab.autofill.markFilled(kinds)
             showBrowserToast("Filled \(name)")
         }
     }

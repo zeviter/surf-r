@@ -88,6 +88,39 @@ extension AutofillFillTests {
         (try await webView.evaluateJavaScript("document.getElementById('email').value", in: nil, contentWorld: Self.testWorld) as? String) ?? "<nil>"
     }
 
+    // MARK: - Field anchors (8e)
+
+    private func anchors(_ webView: WKWebView) async throws -> [[String: Any]] {
+        (try await webView.callAsyncJavaScript("return __surfrFieldAnchors()", arguments: [:], in: nil, contentWorld: Self.testWorld) as? [[String: Any]]) ?? []
+    }
+
+    /// A login form yields username + password anchors with real (non-zero) rects.
+    func test_fieldAnchors_login() async throws {
+        let (webView, _) = try await load("autofill_save_login.html", at: "https://example.com/login")
+        let a = try await anchors(webView)
+        XCTAssertEqual(a.compactMap { $0["kind"] as? String }.sorted(), ["password", "username"])
+        for anchor in a {
+            XCTAssertGreaterThan((anchor["w"] as? NSNumber)?.doubleValue ?? 0, 0)
+            XCTAssertGreaterThan((anchor["h"] as? NSNumber)?.doubleValue ?? 0, 0)
+        }
+    }
+
+    /// A change-password form (3 passwords, not a fillable login) yields no anchors.
+    func test_fieldAnchors_changeForm_none() async throws {
+        let (webView, _) = try await load("autofill_save_change.html", at: "https://example.com/account/change-password")
+        let a = try await anchors(webView)
+        XCTAssertTrue(a.isEmpty, "change form is not a fillable login → no field anchors")
+    }
+
+    /// The fill returns which kinds it filled (drives the green latch).
+    func test_fill_returnsFilledKinds() async throws {
+        let (webView, _) = try await load("autofill_save_login.html", at: "https://example.com/login")
+        let result = try await webView.callAsyncJavaScript("return await __surfrFill(username, password)",
+                                                           arguments: ["username": "a", "password": "b"], in: nil, contentWorld: Self.testWorld) as? [String: Any]
+        XCTAssertEqual(result?["filledUsername"] as? Bool, true)
+        XCTAssertEqual(result?["filledPassword"] as? Bool, true)
+    }
+
     // MARK: - Save capture (8b)
 
     private func dispatchSubmit(_ webView: WKWebView, setValues: String) async throws {

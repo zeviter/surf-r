@@ -115,10 +115,29 @@
   // Invoked by native at ⌘\ press (callAsyncJavaScript) for a FRESH read of this frame, right now.
   globalThis.__surfrDetect = function () { return snapshot(); };
 
-  // STRUCTURE ONLY — no values.
+  // Field anchors (8e): the fillable fields' viewport rects + kind, for native to draw a key icon
+  // adjacent to each — GENERIC geometry only, NO vault data. Same field set the fill path targets.
+  function rectOf(el) { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; }
+  function anchorList() {
+    const out = [];
+    const pws = passwordFields();
+    if (pws.length === 1) {
+      const pw = pws[0];
+      const u = usernameFor(pw);
+      if (u) out.push(Object.assign({ kind: "username" }, rectOf(u)));
+      out.push(Object.assign({ kind: "password" }, rectOf(pw)));
+    } else if (pws.length === 0) {
+      const u = usernameCandidate();
+      if (u) out.push(Object.assign({ kind: "username" }, rectOf(u)));
+    }
+    return out;
+  }
+  globalThis.__surfrFieldAnchors = anchorList;
+
+  // STRUCTURE ONLY (+ generic anchor geometry) — no values.
   function detect() {
     const s = snapshot();
-    HANDLER.postMessage({ type: "detected", origin: location.origin, hasPassword: s.hasPassword, hasUsername: s.hasUsername });
+    HANDLER.postMessage({ type: "detected", origin: location.origin, hasPassword: s.hasPassword, hasUsername: s.hasUsername, anchors: anchorList() });
   }
 
   // Username field for a password field: explicit autocomplete=username, else the nearest visible
@@ -242,4 +261,17 @@
     detect();
   }
   new MutationObserver(schedule).observe(document.documentElement, { childList: true, subtree: true });
+
+  // 8e: keep the native field-icon overlay anchored. On scroll, tell native to HIDE the icons (a
+  // native overlay can't track WebKit's async scroll smoothly), then re-post fresh anchors when scroll
+  // settles. Only acts when there are fillable fields. Resize re-anchors too.
+  let settle = null;
+  function reanchor() { if (anchorList().length) HANDLER.postMessage({ type: "anchors", anchors: anchorList() }); }
+  window.addEventListener("scroll", function () {
+    if (!anchorList().length) return;
+    HANDLER.postMessage({ type: "scrolling" });
+    if (settle) clearTimeout(settle);
+    settle = setTimeout(reanchor, 140);
+  }, true);
+  window.addEventListener("resize", function () { if (settle) clearTimeout(settle); settle = setTimeout(reanchor, 140); }, true);
 })();
