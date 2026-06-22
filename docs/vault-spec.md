@@ -363,6 +363,28 @@ Two distinct fill paths, sharing the vault but driven differently.
 >   no-longer-visible field — workaround: fill while the popup is open. Cross-origin iframe and
 >   closed-shadow-root logins remain unsupported. See `known-issues.md`.
 
+> **Slice 8b as-built (save / update prompt — WF-8).** surf-r drives its **own** quiet save prompt; this
+> is the only place the every-page JS reads field **values**, gated tightly:
+> - **Trigger:** an explicit submit GESTURE — form `submit`, Enter in a password field, or a submit-ish
+>   button click — of a form with **exactly one VISIBLE password** (excludes change/signup forms with
+>   current+new+confirm) and a non-empty value + adjacent username. Reuses `isVisible` (hidden-field
+>   trap-safe). **No `beforeunload`/navigation heuristic** — a gesture is stronger evidence and avoids
+>   spurious prompts from abandoned half-filled forms. HTTPS only; the host is the **native** frame
+>   origin (unspoofable). A **setting "Offer to save logins" (default on)** disables capture.
+> - **Decision (`SaveDecision`, pure + tested):** vs existing same-registrable-domain creds — exact dup
+>   (same username **and** password) → no prompt; same username, different password → **Update**; new →
+>   **Save**; per-site **Never** list → no prompt. The dup check decrypts existing items; the decrypted
+>   JSON Data is **zeroed immediately** (`decryptPayload` `defer resetBytes`) and the plaintext copies
+>   dropped right after.
+> - **Captured-secret lifetime:** held in a `WipeableSecret` with a **bounded ~90s timeout** and
+>   **zero-on-every-exit** — save / Never / dismiss(✕) / tab-switch / auto-lock / timeout / replacement /
+>   `deinit` all wipe it. The only retained copy.
+> - **UX:** unobtrusive bottom bar; **✕ = dismiss once** (no re-nag — auto-dismiss if ignored) is
+>   distinct from **Never** (persisted per-site suppression). Locked vault → **"Unlock & Save"** (unlock,
+>   then store on the same page; the decision is recomputed post-unlock so a dup is still skipped — no
+>   eject). Proven: single-password login captures; change-form (3 passwords) and hidden-password
+>   forms do **not** (`test_save_*`).
+
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)
 and implements `prepareInterface(forPasskeyRegistration:)` + the assertion path, returning
