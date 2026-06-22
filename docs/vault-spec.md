@@ -307,6 +307,13 @@ Two distinct fill paths, sharing the vault but driven differently.
 > host match + visible-field-only fill). The **hidden-field trap** (page hides a password field to
 > capture the fill) is defeated by visible-only fill — proven deterministically by `AutofillFillTests`
 > (loads the fixture at an `https://example.com` origin, fills, asserts traps stay empty).
+>
+> **Known v1 limit — two-step / username-first flows.** Detection keys on `input[type=password]`, so a
+> page-1 that shows **only** an email/username field + Continue (Amazon, Google, Microsoft, many SSO)
+> isn't recognized and ⌘\\ shows nothing on page 1. Page 2 (the password page) **does** work — it has a
+> password field, so ⌘\\ offers and fills there. Filling the username on page 1 (detect
+> `autocomplete="username"` / `type=email` + submit with no password; fill username, then fill the
+> password when page 2 loads) is a planned small follow-on slice (**8c**), not a blocker for 8a/8b.
 
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)
