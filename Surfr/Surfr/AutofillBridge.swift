@@ -50,6 +50,16 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
         MainActor.assumeIsolated {
             let origin = message.frameInfo.securityOrigin
             let body = message.body as? [String: Any]
+            // Save-on-submit (8b): the captured login credential — HTTPS only, native frame origin
+            // (a page can't spoof its own origin). Routed to the shared save coordinator.
+            if body?["type"] as? String == "submitted" {
+                guard origin.protocol == "https", !origin.host.isEmpty else { return }
+                AutofillSaveCoordinator.shared.handleSubmit(
+                    host: origin.host,
+                    username: body?["username"] as? String ?? "",
+                    password: body?["password"] as? String ?? "")
+                return
+            }
             update(scheme: origin.protocol, host: origin.host,
                    hasPassword: body?["hasPassword"] as? Bool ?? false,
                    hasUsername: body?["hasUsername"] as? Bool ?? false,

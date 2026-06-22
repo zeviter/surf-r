@@ -1553,6 +1553,9 @@ struct ContentView: View {
     /// ⌘\ on a locked vault: after unlocking, stay on the web page and complete the fill instead of
     /// ejecting into the vault surface.
     @State private var fillAfterUnlock = false
+    /// Save-on-submit prompt (8b). After unlocking for a locked save, complete the save (no eject).
+    @StateObject private var saveCoordinator = AutofillSaveCoordinator.shared
+    @State private var saveAfterUnlock = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1611,6 +1614,12 @@ struct ContentView: View {
                     .transition(.opacity)
                 }
 
+                // Save-login prompt (8b), bottom — unobtrusive, distinct Never vs ✕, auto-dismiss.
+                AutofillSaveBar(coordinator: saveCoordinator) {
+                    saveAfterUnlock = true
+                    NotificationCenter.default.post(name: .openVault, object: nil)
+                }
+
                 // Browser-chrome toast (fill confirmation / errors), bottom-center, auto-clears.
                 if let msg = browserToast {
                     Label(msg, systemImage: "checkmark.circle.fill")
@@ -1630,7 +1639,8 @@ struct ContentView: View {
         // Addition 5: bind the macOS window title to the active tab's page title.
         .navigationTitle(browser.windowTitle)
         // Addition 3: install/remove the app-local mouse side-button monitor.
-        .onAppear { installMouseNavMonitor() }
+        .onAppear { installMouseNavMonitor(); saveCoordinator.gate = vault }
+        .animation(.easeInOut(duration: 0.18), value: saveCoordinator.pending?.id)
         .onDisappear { removeMouseNavMonitor() }
         .onChange(of: browser.activeTabID) { _, _ in showSpotlight = false }
         .task {
@@ -1692,6 +1702,7 @@ struct ContentView: View {
         // drop the session. (Full resign-active + 5-min idle-timer options are a documented follow-on.)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
             vault.lockNow()
+            saveCoordinator.dismiss()   // security boundary: zero any pending captured credential
         }
         .onReceive(NotificationCenter.default.publisher(for: .openVault)) { _ in
             showSpotlight = false   // don't leave the omnibox overlay lingering under the vault overlay
@@ -1709,7 +1720,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .fillCredential)) { _ in
             summonAutofill()
         }
-        .onChange(of: browser.activeTabID) { _, _ in autofillCandidates = [] }   // dismiss picker on tab switch
+        .onChange(of: browser.activeTabID) { _, _ in autofillCandidates = []; saveCoordinator.dismiss() }   // tab switch: drop picker + pending save (zeroed)
         .onReceive(NotificationCenter.default.publisher(for: .toggleBookmark)) { _ in
             let webView = browser.activeTab.webView
             guard let url = webView.url else { return }
@@ -1945,6 +1956,12 @@ struct ContentView: View {
         if fillAfterUnlock {
             fillAfterUnlock = false
             if vault.isUnlocked { DispatchQueue.main.async { summonAutofill() } }
+            return
+        }
+        // "Unlock & Save"-triggered unlock: complete the pending save, stay on the page.
+        if saveAfterUnlock {
+            saveAfterUnlock = false
+            if vault.isUnlocked { Task { await saveCoordinator.save() } } else { saveCoordinator.dismiss() }
             return
         }
         // Navigate to the vault surface only if we're not already on it. Unlocking from the locked

@@ -88,6 +88,39 @@ extension AutofillFillTests {
         (try await webView.evaluateJavaScript("document.getElementById('email').value", in: nil, contentWorld: Self.testWorld) as? String) ?? "<nil>"
     }
 
+    // MARK: - Save capture (8b)
+
+    private func dispatchSubmit(_ webView: WKWebView, setValues: String) async throws {
+        _ = try await webView.callAsyncJavaScript(
+            setValues + "; document.querySelector('form').dispatchEvent(new Event('submit', {bubbles:true})); return true",
+            arguments: [:], in: nil, contentWorld: Self.testWorld)
+    }
+
+    /// Single visible password + adjacent username + submit → captures {username, password}.
+    func test_save_singlePasswordLogin_captures() async throws {
+        let (webView, handler) = try await load("autofill_save_login.html", at: "https://example.com/login")
+        try await dispatchSubmit(webView, setValues: "document.getElementById('u').value='alice'; document.getElementById('p').value='s3cretP@ss'")
+        for _ in 0..<50 where handler.lastSubmitted == nil { try? await Task.sleep(nanoseconds: 20_000_000) }
+        XCTAssertEqual(handler.lastSubmitted?["username"] as? String, "alice")
+        XCTAssertEqual(handler.lastSubmitted?["password"] as? String, "s3cretP@ss")
+    }
+
+    /// Change-password form (current+new+confirm = 3 password fields) → must NOT capture.
+    func test_save_changeForm_doesNotCapture() async throws {
+        let (webView, handler) = try await load("autofill_save_change.html", at: "https://example.com/account/change-password")
+        try await dispatchSubmit(webView, setValues: "document.getElementById('cur').value='old'; document.getElementById('new').value='new1'; document.getElementById('confirm').value='new1'")
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNil(handler.lastSubmitted, "multi-password change form must not be captured as a login")
+    }
+
+    /// A form whose only password field is hidden → must NOT capture (hidden-field-trap safe).
+    func test_save_hiddenPassword_doesNotCapture() async throws {
+        let (webView, handler) = try await load("autofill_save_hidden.html", at: "https://example.com/login")
+        try await dispatchSubmit(webView, setValues: "document.getElementById('u').value='alice'; document.getElementById('p').value='leak'")
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNil(handler.lastSubmitted, "a hidden password field must never be captured")
+    }
+
     /// STRONG signal (autocomplete=username) → detected + filled, regardless of URL.
     func test_usernameFirst_strong_detectsAndFills() async throws {
         let (webView, handler) = try await load("autofill_username_first.html", at: "https://example.com/")
@@ -185,10 +218,14 @@ extension AutofillFillTests {
 
 private final class CapturingHandler: NSObject, WKScriptMessageHandler {
     private(set) var lastDetected: [String: Any]?
+    private(set) var lastSubmitted: [String: Any]?
     func userContentController(_ c: WKUserContentController, didReceive message: WKScriptMessage) {
         MainActor.assumeIsolated {
-            if let body = message.body as? [String: Any], body["type"] as? String == "detected" {
-                lastDetected = body
+            guard let body = message.body as? [String: Any] else { return }
+            switch body["type"] as? String {
+            case "detected": lastDetected = body
+            case "submitted": lastSubmitted = body
+            default: break
             }
         }
     }

@@ -164,6 +164,68 @@
     return { filledPassword: true, filledUsername: filledUsername };
   };
 
+  // ── Save capture (Slice 8b) ───────────────────────────────────────────────────────────────────
+  // The ONLY place this script reads field VALUES — and only on an explicit submit GESTURE of a
+  // detected single-password login form. No keystroke logging, no beforeunload heuristic (which would
+  // misfire on abandoned half-filled forms): we capture on real submit / Enter-in-password /
+  // submit-ish button click. Tight trigger: exactly one VISIBLE password (excludes change/signup
+  // forms with current+new+confirm) with a non-empty value, reusing isVisible (hidden-field-trap safe).
+  let lastKey = "", lastAt = 0;
+
+  function usernameInScope(root, pw) {
+    const sel = 'input[autocomplete="username"], input[type="text"], input[type="email"], input[type="tel"], input:not([type])';
+    const q = root === document ? deepQueryAll(sel) : Array.prototype.slice.call(root.querySelectorAll(sel));
+    const fields = q.filter((el) => isVisible(el) && !looksLikeSearch(el));
+    const explicit = fields.find((el) => (el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/).includes("username"));
+    if (explicit) return explicit;
+    let best = null;
+    for (const el of fields) { try { if (pw.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) best = el; } catch (e) { /* cross-root */ } }
+    return best || fields[0] || null;
+  }
+
+  function maybeCapture(scope) {
+    const root = scope && scope.querySelectorAll ? scope : document;
+    const pws = (root === document ? passwordFields()
+                 : Array.prototype.filter.call(root.querySelectorAll('input[type="password"]'), isVisible));
+    if (pws.length !== 1) return;            // exactly one visible password — not change/signup
+    const pw = pws[0];
+    if (!pw.value) return;                   // non-empty
+    const u = usernameInScope(root, pw);
+    const username = u ? u.value : "";
+    const key = username + " " + pw.value;
+    const now = (window.performance && performance.now) ? performance.now() : 0;
+    if (key === lastKey && now - lastAt < 1500) return;   // dedup rapid duplicate gestures
+    lastKey = key; lastAt = now;
+    HANDLER.postMessage({ type: "submitted", username: username, password: pw.value });
+  }
+
+  function isSubmitish(el) {
+    if (!el || !el.tagName) return false;
+    if (el.tagName === "INPUT") return /submit/i.test(el.type || "");
+    if (el.tagName === "BUTTON") {
+      const t = (el.type || "submit").toLowerCase();   // a <button> defaults to type=submit
+      return t === "submit" || /sign\s?in|log\s?in|sign\s?on|continue|next/i.test(el.textContent || "");
+    }
+    return false;
+  }
+
+  document.addEventListener("submit", (e) => {
+    maybeCapture((e.composedPath && e.composedPath()[0]) || e.target);
+  }, true);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const t = (e.composedPath && e.composedPath()[0]) || e.target;
+    if (t && t.tagName === "INPUT" && (t.type || "").toLowerCase() === "password") maybeCapture(t.form || null);
+  }, true);
+
+  document.addEventListener("click", (e) => {
+    const path = (e.composedPath && e.composedPath()) || [e.target];
+    if (!path.some(isSubmitish)) return;     // only submit-ish buttons (not a show-password toggle)
+    const btn = path.find(isSubmitish);
+    maybeCapture(btn.form || (btn.closest && btn.closest("form")) || null);
+  }, true);
+
   // Initial detection + AGGRESSIVELY debounced re-scan for SPA/dynamic forms. The observer callback
   // only re-runs structure-only detect(); it never reads content. At most one detect per window.
   let timer = null;

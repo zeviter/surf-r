@@ -336,8 +336,54 @@ final class VaultGate: ObservableObject {
     func decryptPayload(_ item: StoredItem) -> LoginPayload? {
         guard phase == .unlocked else { return nil }
         return try? lock.withVaultKey { key in
-            let data = try VaultCrypto.decryptItem(item.sealed, vaultKey: key)
+            var data = try VaultCrypto.decryptItem(item.sealed, vaultKey: key)
+            defer { data.resetBytes(in: 0..<data.count) }   // zero the decrypted JSON immediately after use
             return try LoginPayload.decoded(from: data)
+        }
+    }
+
+    // MARK: - Save-on-submit (Slice 8b)
+
+    private static let neverSaveKey = "SurfrVaultNeverSaveDomains"
+    /// Registrable domains the user said "Never save" for. Persisted.
+    private(set) var neverSaveDomains: Set<String> =
+        Set(UserDefaults.standard.stringArray(forKey: VaultGate.neverSaveKey) ?? [])
+
+    func neverSave(domain: String) {
+        let d = TrustStore.registrableDomain(forHostOrURL: domain)
+        guard !d.isEmpty else { return }
+        neverSaveDomains.insert(d)
+        UserDefaults.standard.set(Array(neverSaveDomains), forKey: Self.neverSaveKey)
+    }
+
+    /// Classify a captured credential. Decrypts existing same-domain items to compare (the decrypted
+    /// JSON Data is zeroed in `decryptPayload`; the transient `String`s are dropped immediately after).
+    func saveDecision(host: String, username: String, password: String) -> SaveDecision {
+        let domain = TrustStore.registrableDomain(forHostOrURL: host)
+        if neverSaveDomains.contains(domain) { return .neverListed }
+        guard phase == .unlocked, !domain.isEmpty else { return .save }   // can't dedup while locked
+        let matched = items.filter { $0.hosts.contains { TrustStore.registrableDomain(forHostOrURL: $0.host) == domain } }
+        var existing: [(id: UUID, username: String, password: String)] = []
+        for it in matched { if let p = decryptPayload(it) { existing.append((it.id, p.username, p.password)) } }
+        defer { existing.removeAll() }   // drop decrypted copies ASAP
+        return SaveDecision.classify(username: username, password: password, existing: existing, neverListed: false)
+    }
+
+    /// Store a captured credential per the decision (new item or password update).
+    func saveFromCapture(host: String, username: String, password: String, decision: SaveDecision) async {
+        let domain = TrustStore.registrableDomain(forHostOrURL: host)
+        switch decision {
+        case .save:
+            let label = TrustStore.primaryLabel(forDomain: domain)
+            await saveItem(id: nil, title: label.isEmpty ? domain : label,
+                           payload: LoginPayload(username: username, password: password, urls: ["https://\(domain)"]),
+                           hosts: [SurfrCore.Host(host: domain, isPrimary: true)])
+        case .update(let id):
+            guard let it = items.first(where: { $0.id == id }), var payload = decryptPayload(it) else { return }
+            payload.password = password
+            await saveItem(id: id, title: it.title, payload: payload, hosts: it.hosts)
+        case .noPrompt, .neverListed:
+            break
         }
     }
 
