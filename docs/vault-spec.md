@@ -271,6 +271,40 @@ Two distinct fill paths, sharing the vault but driven differently.
   Password AutoFill fills sometimes but the system "save password" prompt usually doesn't fire — hence
   Path B owns its save UI for surf-r's surfaces.
 
+> **Slice 8a as-built (detect + host-match + fill; save is 8b).** The two load-bearing concerns:
+>
+> **Every-page JS — isolated & minimal.** The detector (`Autofill.js`) is injected at document-start
+> into **all frames** in a **dedicated isolated `WKContentWorld`** (`AutofillBridge.world`). This is the
+> keystone control: the page world **cannot read, override, or post to** our script or handler — the
+> handler is registered only in that world. The script **egresses nothing** (only `postMessage` to
+> native), adds **no globals to the page world** (not fingerprintable), and **detection reports
+> structure only** (`{ hasPassword }` + origin) — never values/keystrokes. `__surfrFill` writes
+> **visible fields only** and returns booleans. SPA support is a single `MutationObserver` with an
+> **aggressive 800 ms coalescing debounce** (≤1 structure-only rescan per window — cheap on heavy
+> SPAs); the callback can't widen into reading content. iframes: detected per-frame; **fill is main +
+> same-origin only** (cross-origin iframe fill deferred). Shadow DOM: open roots best-effort.
+>
+> **Host match — anti-leak.** `AutofillMatcher` offers a credential **only** when the frame's
+> registrable domain (eTLD+1, via `TrustStore.registrableDomain`) **exactly equals** the credential's,
+> over **HTTPS only**. No fuzzy/substring/edit-distance matching. Matching uses the **native**
+> `WKFrameInfo.securityOrigin` (a page can't spoof its own origin), and fill targets that
+> origin-matched frame. Look-alikes (`evil-example.com`), suffix attacks (`example.com.evil.com` →
+> `evil.com`), typo-squats, wrong-TLD, and `http://` are all rejected — proven by the
+> `AutofillMatcherTests` matrix.
+>
+> **Fill.** Inline keyboard-first picker (⌘\\, `AutofillSuggestionView`), shows **title+host only** (no
+> decryption until pick). On pick: biometric gate (`biometricAuthenticateForReveal`, when enabled;
+> master-fallback-for-fill on non-biometric Macs is a follow-on) → decrypt → fill via
+> **`callAsyncJavaScript(arguments:)`** in the isolated world (password passed as an **argument**,
+> never string-interpolated, never the clipboard) → "Filled" toast. surf-r doesn't retain the password
+> after the call.
+>
+> **Threat model.** A page can't reach the handler (isolated world); a spoofed "field present" message
+> can at most make the ⌘\\ affordance appear (extraction still needs user summon + biometric + exact
+> host match + visible-field-only fill). The **hidden-field trap** (page hides a password field to
+> capture the fill) is defeated by visible-only fill — proven deterministically by `AutofillFillTests`
+> (loads the fixture at an `https://example.com` origin, fills, asserts traps stay empty).
+
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)
 and implements `prepareInterface(forPasskeyRegistration:)` + the assertion path, returning
