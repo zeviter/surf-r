@@ -1207,6 +1207,16 @@ struct RailView: View {
                             // Addition 1: right-click close-all for this host group.
                             onCloseHost: { browser.closeHost(group.host) }
                         )
+                        // 8d: clickable "saved login available" key on the active web host's tile —
+                        // bottom-leading (trust/insecure use top-trailing, count bottom-trailing).
+                        .overlay(alignment: .bottomLeading) {
+                            if group.isActive, browser.activeTab.kind == .web {
+                                LoginKeyBadge(controller: browser.activeTab.autofill) {
+                                    NotificationCenter.default.post(name: .fillCredential, object: nil)
+                                }
+                                .offset(x: 1, y: -1)
+                            }
+                        }
                         .popover(isPresented: flyoutBinding(for: group.host), arrowEdge: .trailing) {
                             TabFlyout(browser: browser, host: group.host) { flyoutHost = nil }
                         }
