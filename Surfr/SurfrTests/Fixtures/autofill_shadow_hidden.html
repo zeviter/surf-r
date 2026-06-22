@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Sign in</title></head>
+<body>
+  <h1>Sign in</h1>
+  <!-- Login popup whose shadow host is HIDDEN (closed but not removed) — the fields still exist in the
+       shadow DOM and look visible within it, but the host is display:none. Composed-tree visibility
+       must treat them as not present: no detection, no fill. -->
+  <login-popup style="display:none"></login-popup>
+  <script>
+    const host = document.querySelector("login-popup");
+    const root = host.attachShadow({ mode: "open" });
+    root.innerHTML =
+      '<form>' +
+      '<input id="suser" type="text" autocomplete="username">' +
+      '<input id="spass" type="password">' +
+      '<button type="submit">Sign in</button>' +
+      '</form>';
+  </script>
+</body>
+</html>

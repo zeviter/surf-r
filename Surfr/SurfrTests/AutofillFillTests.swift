@@ -131,6 +131,20 @@ extension AutofillFillTests {
         XCTAssertEqual(onDemand?["hasUsername"] as? Bool, false)
     }
 
+    /// The Barbican "closed popup" bug: a shadow-DOM login whose host is display:none (popup closed but
+    /// not removed). Composed-tree visibility must treat the fields as not present → no detection, and
+    /// __surfrFill targets nothing (the shadow password stays empty). State 3 behaves like state 1.
+    func test_shadowLogin_hiddenHost_offersAndFillsNothing() async throws {
+        let (webView, handler) = try await load("autofill_shadow_hidden.html", at: "https://example.com/")
+        XCTAssertEqual(handler.lastDetected?["hasPassword"] as? Bool, false, "hidden shadow host → no password field present")
+        XCTAssertEqual(handler.lastDetected?["hasUsername"] as? Bool, false)
+        _ = try await webView.callAsyncJavaScript("return await __surfrFill(username, password)",
+                                                  arguments: ["username": "x", "password": "leak"], in: nil, contentWorld: Self.testWorld)
+        let pass = (try await webView.evaluateJavaScript(
+            "document.querySelector('login-popup').shadowRoot.getElementById('spass').value", in: nil, contentWorld: Self.testWorld) as? String) ?? "<nil>"
+        XCTAssertEqual(pass, "", "must never fill a hidden shadow field")
+    }
+
     /// Security regression guard: a home page with a "Log in" BUTTON + a search box (no actual login
     /// form) must NOT be treated as a login — host match alone must never offer/fill. Detection reports
     /// neither field, and __surfrFillUsername fills nothing (the search box stays empty).

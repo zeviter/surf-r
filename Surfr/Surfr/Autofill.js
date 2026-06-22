@@ -14,11 +14,25 @@
     (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.surfrAutofill) || null;
   if (!HANDLER) return;
 
+  // Visibility computed across the COMPOSED tree (through shadow boundaries). A field can look visible
+  // inside its own shadow root while the popup's shadow HOST (or any ancestor, inside or outside the
+  // shadow tree) is display:none / visibility:hidden / opacity:0 — e.g. a login popup that's been
+  // CLOSED but only hidden, not removed. Walk field → ancestors → shadow host → … → document; if any
+  // is hidden, the field is not present. This is the visible-only rule the hidden-field trap relies on.
   function isVisible(el) {
     if (!el || el.type === "hidden" || el.disabled || el.readOnly) return false;
-    if (!el.getClientRects().length || el.offsetParent === null) return false;
-    const s = getComputedStyle(el);
-    return s.visibility !== "hidden" && s.display !== "none";
+    if (!el.getClientRects().length) return false;                 // display:none anywhere / detached
+    let node = el;
+    while (node && node.nodeType === 1) {
+      const s = getComputedStyle(node);
+      if (s.display === "none" || s.visibility === "hidden" || s.visibility === "collapse" || parseFloat(s.opacity || "1") === 0) return false;
+      const parent = node.parentNode;
+      node = (parent instanceof ShadowRoot) ? parent.host : parent;   // cross the shadow boundary
+    }
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;                 // zero-size
+    if (r.right <= 0 || r.bottom <= 0) return false;               // off-screen above/left (e.g. -9999px)
+    return true;
   }
 
   // Query that pierces OPEN shadow roots (login popups/modals are often web components). Closed roots
