@@ -308,12 +308,18 @@ Two distinct fill paths, sharing the vault but driven differently.
 > capture the fill) is defeated by visible-only fill — proven deterministically by `AutofillFillTests`
 > (loads the fixture at an `https://example.com` origin, fills, asserts traps stay empty).
 >
-> **Known v1 limit — two-step / username-first flows.** Detection keys on `input[type=password]`, so a
-> page-1 that shows **only** an email/username field + Continue (Amazon, Google, Microsoft, many SSO)
-> isn't recognized and ⌘\\ shows nothing on page 1. Page 2 (the password page) **does** work — it has a
-> password field, so ⌘\\ offers and fills there. Filling the username on page 1 (detect
-> `autocomplete="username"` / `type=email` + submit with no password; fill username, then fill the
-> password when page 2 loads) is a planned small follow-on slice (**8c**), not a blocker for 8a/8b.
+> **Slice 8c as-built — two-step / username-first flows.** Detection now also recognizes a username-
+> first page-1 (Amazon, Google, Microsoft, many SSO) with **weighted signals**: a visible field with
+> `autocomplete="username"`/`"email"` is a **strong, trusted** login signal; a **bare `type="email"`/
+> text** field is **weak** and only counts as a login username with corroborating **login context**
+> (URL/title contains signin/login/auth/account/sso, the form `action` does, or a visible "Sign in"
+> heading/button). A **newsletter/contact** email box (no context) is therefore **not** offered — proven
+> by `AutofillFillTests` (same bare-email markup fires at a `/login` URL, stays silent at a plain URL).
+> ⌘\\ on a username-first page fills **only the username** (`__surfrFillUsername` — the password is not
+> sent to page 1); no auto-submit. Page 2 (password) uses the existing path: a second ⌘\\ fills the
+> password. Cross-page auto-complete (remember the pick, auto-fill page 2) is deliberately deferred.
+> The "no candidates" message distinguishes a **detection** miss ("No login field detected") from a
+> **match** miss ("No saved login matches this page") so failures are diagnosable.
 
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)
