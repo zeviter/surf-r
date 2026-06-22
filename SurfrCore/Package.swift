@@ -31,7 +31,9 @@ let package = Package(
             dependencies: [
                 "CArgon2",
                 .product(name: "GRDB", package: "GRDB.swift"),
-            ]
+            ],
+            // Bundled EFF large wordlist (7776 words, CC-BY 3.0) for the Diceware generator — no network.
+            resources: [.process("Resources/eff_large_wordlist.txt")]
         ),
         .testTarget(
             name: "SurfrCoreTests",

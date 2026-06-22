@@ -18,6 +18,7 @@ struct VaultEditView: View {
     @State private var notes = ""
     @State private var totpURI = ""
     @State private var loaded = false
+    @State private var showGenerator = false
     // In-Edit QR scan: hold the source image (access stays open) until the delete decision.
     @State private var scannedImageURL: URL?
     @State private var scanAccessing = false
@@ -33,7 +34,16 @@ struct VaultEditView: View {
 
                 labeled("Title") { TextField("e.g. GitHub", text: $title).textFieldStyle(.roundedBorder) }
                 labeled("Username") { TextField("you@example.com", text: $username).textFieldStyle(.roundedBorder) }
-                labeled("Password") { VaultPasswordField(placeholder: "Password", text: $password) }
+                labeled("Password") {
+                    HStack {
+                        VaultPasswordField(placeholder: "Password", text: $password)
+                        Button { showGenerator = true } label: { Image(systemName: "wand.and.stars") }
+                            .help("Generate a password")
+                            .popover(isPresented: $showGenerator, arrowEdge: .bottom) {
+                                GeneratorView { password = $0; showGenerator = false }
+                            }
+                    }
+                }
                 labeled("Website") { TextField("https://example.com", text: $website).textFieldStyle(.roundedBorder) }
                 labeled("Notes") {
                     TextEditor(text: $notes).frame(height: 80)
