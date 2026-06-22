@@ -13,6 +13,8 @@ struct GeneratorView: View {
     @State private var passphrase = PasswordGenerator.PassphraseOptions()
     @State private var preview = ""
     @State private var classWarning: String?
+    @State private var copyNotice: String?
+    @State private var copyClearTask: Task<Void, Never>?
 
     private let separators: [(label: String, value: String)] = [("hyphen", "-"), ("period", "."), ("underscore", "_"), ("space", " ")]
 
@@ -53,7 +55,7 @@ struct GeneratorView: View {
                 Spacer()
                 VStack(spacing: 6) {
                     Button { regenerate() } label: { Image(systemName: "arrow.clockwise") }.help("Regenerate")
-                    Button { VaultClipboard.copyConcealed(preview) } label: { Image(systemName: "doc.on.doc") }.help("Copy")
+                    Button { copyPreview() } label: { Image(systemName: copyNotice == nil ? "doc.on.doc" : "checkmark") }.help("Copy")
                 }.buttonStyle(.plain)
             }
             // Entropy + strength
@@ -64,8 +66,11 @@ struct GeneratorView: View {
                         Capsule().fill(strengthColor).frame(width: geo.size.width * min(bits / 128, 1))
                     }
                 }.frame(height: 6)
-                Text("≈ \(Int(bits)) bits · \(strength.rawValue)").font(.caption).foregroundStyle(.secondary)
-                    .fixedSize()
+                if let copyNotice {
+                    Label(copyNotice, systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green).fixedSize()
+                } else {
+                    Text("≈ \(Int(bits)) bits · \(strength.rawValue)").font(.caption).foregroundStyle(.secondary).fixedSize()
+                }
             }
         }
         .padding(10)
@@ -130,5 +135,16 @@ struct GeneratorView: View {
 
     private func regenerate() {
         preview = mode == .random ? PasswordGenerator.random(random) : PasswordGenerator.passphrase(passphrase)
+    }
+
+    /// Copy + transient "Copied" confirmation (same pattern as the detail-view copies in Slice 7).
+    private func copyPreview() {
+        VaultClipboard.copyConcealed(preview)
+        copyNotice = "Copied"
+        copyClearTask?.cancel()
+        copyClearTask = Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if !Task.isCancelled { copyNotice = nil }
+        }
     }
 }
