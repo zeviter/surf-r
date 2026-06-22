@@ -13,7 +13,11 @@ enum SaveDecision: Equatable {
                          existing: [(id: UUID, username: String, password: String)],
                          neverListed: Bool) -> SaveDecision {
         if neverListed { return .neverListed }
-        if existing.contains(where: { $0.username == username && $0.password == password }) { return .noPrompt }
+        // Belt-and-suspenders: if this exact password already exists for the host, it's a dup — never
+        // re-offer a just-filled credential, even with an empty/different captured username (e.g. a
+        // two-step page-2 capture). (Trade-off: a genuinely new account that REUSES an existing
+        // password on the same site won't be offered — documented; password reuse is discouraged.)
+        if existing.contains(where: { $0.password == password }) { return .noPrompt }
         if let match = existing.first(where: { $0.username == username }) { return .update(itemID: match.id) }
         return .save
     }

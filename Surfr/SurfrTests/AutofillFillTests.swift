@@ -113,6 +113,23 @@ extension AutofillFillTests {
         XCTAssertNil(handler.lastSubmitted, "multi-password change form must not be captured as a login")
     }
 
+    /// Signup form (email + password + confirm = 2 passwords) → must NOT capture.
+    func test_save_signupForm_doesNotCapture() async throws {
+        let (webView, handler) = try await load("autofill_save_signup.html", at: "https://example.com/signup")
+        try await dispatchSubmit(webView, setValues: "document.getElementById('u').value='a@b.com'; document.getElementById('p').value='new1'; document.getElementById('confirm').value='new1'")
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNil(handler.lastSubmitted, "signup (2 password fields) must not capture")
+    }
+
+    /// Amazon-fix regression: a password-only page (no username, e.g. two-step page 2) → must NOT
+    /// capture (can't dedup → would spuriously re-offer the just-filled credential).
+    func test_save_passwordOnlyPage_doesNotCapture() async throws {
+        let (webView, handler) = try await load("autofill_save_passwordonly.html", at: "https://example.com/ap/signin")
+        try await dispatchSubmit(webView, setValues: "document.getElementById('p').value='s3cret'")
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNil(handler.lastSubmitted, "password-only page (no username) must not capture")
+    }
+
     /// A form whose only password field is hidden → must NOT capture (hidden-field-trap safe).
     func test_save_hiddenPassword_doesNotCapture() async throws {
         let (webView, handler) = try await load("autofill_save_hidden.html", at: "https://example.com/login")

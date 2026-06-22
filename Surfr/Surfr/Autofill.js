@@ -192,6 +192,9 @@
     if (!pw.value) return;                   // non-empty
     const u = usernameInScope(root, pw);
     const username = u ? u.value : "";
+    if (!username) return;   // require a non-empty adjacent username — password-only pages (two-step
+                             // page 2) can't be deduped, so capturing would spuriously re-offer the
+                             // just-filled credential. Two-step page-1→2 capture deferred to v1.5.
     const key = username + " " + pw.value;
     const now = (window.performance && performance.now) ? performance.now() : 0;
     if (key === lastKey && now - lastAt < 1500) return;   // dedup rapid duplicate gestures

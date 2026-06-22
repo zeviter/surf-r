@@ -14,14 +14,16 @@ struct AutofillSaveBar: View {
                 Image(systemName: "key.horizontal.fill").foregroundStyle(.secondary)
                 Text(prompt(p)).font(.callout).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
+                // Three distinct outcomes. "Not now" dismisses THIS prompt only (re-offers next
+                // qualifying login — never writes the never-list); "Never" persists per-site suppression.
+                Button("Not now") { coordinator.dismiss() }
+                    .help("Dismiss — offer again next time you log in here")
                 Button("Never") { coordinator.never() }
                     .help("Never offer to save for \(p.domain)")
                 Button(primaryLabel(p)) {
                     if p.kind == .lockedSave { onUnlockAndSave() } else { Task { await coordinator.save() } }
                 }
                 .keyboardShortcut(.defaultAction)
-                Button { coordinator.dismiss() } label: { Image(systemName: "xmark") }
-                    .buttonStyle(.plain).help("Not now")
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
             .frame(maxWidth: 520)
