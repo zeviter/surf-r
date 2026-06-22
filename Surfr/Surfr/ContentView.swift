@@ -1538,6 +1538,9 @@ private struct BrowserCommandHandlers: ViewModifier {
     }
 }
 
+/// A fill awaiting master-password fallback (biometric cancelled/unavailable).
+private struct PendingFill { let item: StoredItem; let frame: WKFrameInfo?; let usernameOnly: Bool }
+
 struct ContentView: View {
     @StateObject private var browser = BrowserState()
     /// Context A overlay presented (only on a loaded page).
@@ -1561,6 +1564,11 @@ struct ContentView: View {
     /// Slice 8a/8c: autofill picker candidates (item + the origin-matched frame + whether the page is
     /// a two-step username-only page, so we fill just the username).
     @State private var autofillCandidates: [(item: StoredItem, frame: WKFrameInfo?, usernameOnly: Bool)] = []
+    /// Master-password fallback for fill (when biometric is cancelled/unavailable) — "Use master
+    /// password" must work, never dead-end.
+    @State private var pendingMasterFill: PendingFill?
+    @State private var masterFillText = ""
+    @State private var masterFillError = false
     /// Transient browser-chrome confirmation (fill / errors), same toast pattern as the vault.
     @State private var browserToast: String?
     /// ⌘\ on a locked vault: after unlocking, stay on the web page and complete the fill instead of
@@ -1633,6 +1641,13 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                     .padding(.top, 64)
                     .transition(.opacity)
+                }
+
+                // Master-password fallback for fill (when Touch ID is cancelled/unavailable).
+                if pendingMasterFill != nil {
+                    MasterFillPrompt(text: $masterFillText, error: masterFillError,
+                                     onSubmit: { Task { await submitMasterFill() } },
+                                     onCancel: { pendingMasterFill = nil; masterFillText = "" })
                 }
 
                 // Save-login prompt (8b), bottom — unobtrusive, distinct Never vs ✕, auto-dismiss.
@@ -1927,28 +1942,38 @@ struct ContentView: View {
         }
     }
 
-    /// Biometric-gate (when enabled), decrypt, and fill into the origin-matched frame. The decrypted
-    /// password is handed to the fill call and not retained by surf-r afterward.
+    /// Auth-gate, then fill. Identical policy to reveal/copy (`VaultItemDetailModel.authThenPerform`):
+    /// setting OFF → fill immediately; setting ON → Touch ID, and **on cancel/no-biometric fall back to
+    /// the master password** (the biometric prompt's "Use master password" must actually work — never a
+    /// dead end). The master prompt is the `pendingMasterFill` overlay.
     private func performFill(item: StoredItem, frame: WKFrameInfo?, usernameOnly: Bool) async {
         autofillCandidates = []
-        // Identical policy to reveal/copy (VaultItemDetailModel.authThenPerform): setting OFF + vault
-        // unlocked → fill immediately, NO prompt; setting ON → Touch ID. (Master-fallback-for-fill on
-        // non-biometric Macs is a documented follow-on; with auth required and no biometric we refuse
-        // rather than fill unauthenticated.)
-        if vault.requireAuthToReveal {
-            if vault.biometricState == .enabled {
-                guard await vault.biometricAuthenticateForReveal() else { return }
-            } else {
-                showBrowserToast("Enable Touch ID, or turn off “Require auth to reveal/copy/fill”, to fill")
-                return
-            }
+        let biometricEnabled = vault.biometricState == .enabled
+        let biometricOK = (vault.requireAuthToReveal && biometricEnabled) ? await vault.biometricAuthenticateForReveal() : false
+        if FillAuth.needsMasterFallback(requireAuth: vault.requireAuthToReveal,
+                                        biometricEnabled: biometricEnabled, biometricSucceeded: biometricOK) {
+            masterFillText = ""; masterFillError = false
+            pendingMasterFill = PendingFill(item: item, frame: frame, usernameOnly: usernameOnly)
+        } else {
+            await doFill(item: item, frame: frame, usernameOnly: usernameOnly)
         }
+    }
+
+    /// Master-fallback submit for fill: verify, then fill. Wrong password keeps the prompt up.
+    private func submitMasterFill() async {
+        guard let pending = pendingMasterFill else { return }
+        guard await vault.verifyMaster(masterFillText) else { masterFillError = true; return }
+        masterFillText = ""; pendingMasterFill = nil
+        await doFill(item: pending.item, frame: pending.frame, usernameOnly: pending.usernameOnly)
+    }
+
+    /// The actual fill (post-auth): decrypt, fill, latch the field icon green.
+    private func doFill(item: StoredItem, frame: WKFrameInfo?, usernameOnly: Bool) async {
         guard let payload = vault.decryptPayload(item) else { showBrowserToast("Couldn’t decrypt login"); return }
         let name = item.title.isEmpty ? "login" : item.title
         if usernameOnly {
-            // Two-step page 1: fill only the username; the password is NOT sent to the page yet.
             let kinds = await browser.activeTab.autofill.fillUsername(payload.username, into: frame)
-            browser.activeTab.autofill.markFilled(kinds)   // latch the field icon green
+            browser.activeTab.autofill.markFilled(kinds)
             showBrowserToast("Filled username — continue, then ⌘\\ for the password")
         } else {
             let kinds = await browser.activeTab.autofill.fill(username: payload.username, password: payload.password, into: frame)

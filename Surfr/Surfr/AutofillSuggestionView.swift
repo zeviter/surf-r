@@ -34,6 +34,35 @@ struct LoginKeyBadge: View {
     }
 }
 
+/// Master-password fallback prompt for in-browser fill (8e fix) — shown when Touch ID is cancelled
+/// ("Use master password") or unavailable, so the fill auth path is never a dead end.
+struct MasterFillPrompt: View {
+    @Binding var text: String
+    let error: Bool
+    let onSubmit: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.3).ignoresSafeArea().onTapGesture(perform: onCancel)
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Enter master password to fill").font(.headline)
+                VaultPasswordField(placeholder: "Master password", text: $text, autoFocus: true, onSubmit: onSubmit)
+                if error { Text("Incorrect master password.").font(.caption).foregroundStyle(.red) }
+                HStack {
+                    Button("Cancel", action: onCancel).keyboardShortcut(.cancelAction)
+                    Spacer()
+                    Button("Unlock & Fill", action: onSubmit).keyboardShortcut(.defaultAction).disabled(text.isEmpty)
+                }
+            }
+            .padding(20).frame(width: 380)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.gray.opacity(0.25)))
+            .shadow(radius: 20, y: 8)
+        }
+    }
+}
+
 /// Per-field click-to-fill key icons (Slice 8e), drawn in surf-r's **native chrome** over the web
 /// view at each fillable field's rect — NOT in page DOM (the page can't query or observe it; reuses
 /// the rail-badge privacy property the in-DOM approach would lose). Generic key glyph only — no vault
@@ -50,11 +79,21 @@ struct FieldKeyOverlay: View {
 
     var body: some View {
         if available, !controller.scrolling {
-            ForEach(controller.fieldAnchors) { anchor in
-                FieldKeyIcon(filled: controller.filledFieldKinds.contains(anchor.kind), action: onFill)
-                    .position(x: anchor.x + anchor.w - 11, y: anchor.y + anchor.h / 2)
+            GeometryReader { geo in
+                ForEach(controller.fieldAnchors) { anchor in
+                    FieldKeyIcon(filled: controller.filledFieldKinds.contains(anchor.kind), action: onFill)
+                        .position(x: iconX(anchor, width: geo.size.width), y: anchor.y + anchor.h / 2)
+                }
             }
         }
+    }
+
+    /// Just PAST the field's trailing edge (so it never overlaps the site's reveal-eye / clear-X /
+    /// validation icons inside the field). Narrow-form fallback: if there's no room outside, tuck it
+    /// just inside the trailing edge.
+    private func iconX(_ a: AutofillController.FieldAnchor, width: CGFloat) -> CGFloat {
+        let outside = a.x + a.w + 12
+        return outside + 12 <= width ? outside : a.x + a.w - 11
     }
 }
 

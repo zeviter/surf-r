@@ -14,6 +14,11 @@
     (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.surfrAutofill) || null;
   if (!HANDLER) return;
 
+  // Fresh page load (this script re-injects at document-start on every load/reload, incl. same-URL
+  // reload where the native URL-KVO doesn't fire) → tell native to clear stale state (e.g. the green
+  // "filled" latch, whose field is now empty).
+  HANDLER.postMessage({ type: "pageload" });
+
   // Visibility computed across the COMPOSED tree (through shadow boundaries). A field can look visible
   // inside its own shadow root while the popup's shadow HOST (or any ancestor, inside or outside the
   // shadow tree) is display:none / visibility:hidden / opacity:0 — e.g. a login popup that's been

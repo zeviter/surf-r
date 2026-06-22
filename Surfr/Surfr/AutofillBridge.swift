@@ -73,6 +73,9 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
                     username: body?["username"] as? String ?? "",
                     password: body?["password"] as? String ?? "")
                 return
+            case "pageload":
+                if message.frameInfo.isMainFrame { reset() }   // fresh load → clear green latch + stale anchors
+                return
             case "scrolling":
                 if message.frameInfo.isMainFrame { scrolling = true }
                 return
