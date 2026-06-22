@@ -334,6 +334,13 @@ Two distinct fill paths, sharing the vault but driven differently.
 >   prompt**; **on → Touch ID** (refuse if no biometric). No extra prompts beyond the reveal policy.
 > - **⌘\\ on a locked vault** unlocks and then **returns to the page and fills** (no eject into the
 >   vault surface) — same surface-restore family as the Slice-5 nav fixes.
+> - **On-demand detection at press (race fix).** ⌘\\ no longer relies on the last debounced (800ms)
+>   observer scan — it runs a **fresh `__surfrDetect()`** in the main frame (+ known subframes) at press
+>   time, so a dynamically-injected shadow-DOM login popup that's still settling isn't read stale
+>   (the intermittent "no saved login"/mis-detected-two-step symptom). Also hydrates vault items before
+>   matching, retries once after ~350ms if fields are present but unmatched, and (DEBUG) logs detected
+>   origin→registrable-domain vs vault domains so any residual race is visible. The push observer
+>   remains for the live affordance.
 
 ### v2 design-ahead — passkeys
 Later, the extension declares `ProvidesPasskeys` (in `NSExtension ▸ ASCredentialProviderExtensionCapabilities`)
