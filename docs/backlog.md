@@ -16,17 +16,18 @@
 - ☐ **IP obfuscation / routing (F1).** `WKWebsiteDataStore.proxyConfigurations` → self-hosted
   WireGuard or Tor (SOCKS5); plus **WebRTC leak hardening** and **DNS-over-HTTPS**. (UA
   normalisation partially done via the Safari UA fix.) Not started.
-- ☐ **Password manager — vault (F5).** Encrypted local store (CryptoKit + Keychain + Secure
-  Enclave), password generator, TOTP, Face/Touch ID gate. Not started.
-- ☐ **Password manager — CSV import (F5, vault Slice 5b — next).** Import LastPass / 1Password /
-  Bitwarden / browser CSV exports via a column-mapping layer, bulk encrypt-and-store through the
-  Slice 5 item API. Plaintext-file discipline: parse **offline**, never cache or log the CSV, and
-  prompt the user to delete the file afterward. LastPass exports omit TOTP seeds → flag those for
-  manual re-add in Slice 7. See `vault-spec.md` §11.
-- ☐ **Password manager — system autofill (F5).** `ASCredentialProviderExtension` (+ passkeys) so
-  credentials fill across all apps. Not started.
-- ☐ **Cross-device sync (F5/F6/F8).** CloudKit private DB, end-to-end encrypted, for vault +
-  bookmarks + settings. Not started. (History stays local by design.)
+- ◐ **Password manager — vault (F5).** ✓ **Built** (vault-spec §11 Slices 1–8e): Argon2id/CryptoKit
+  vault, master + Secure-Enclave biometric unlock, Recovery Kit, list/detail/add-edit, CSV import,
+  generator, TOTP (+ Google Authenticator migration), in-browser fill + save. **Remaining vault
+  slices: 9 (security check) + 10 (system AutoFill extension).**
+- ☐ **Password manager — security check (F5, vault Slice 9).** Local weak/reused/2FA-available
+  surface (WF-9); **fold in import data hygiene** (junk `item_hosts` like `sn`/empty-string registrable
+  domains from messy imports — clean up + a "needs attention" flag). See `known-issues.md`.
+- ☐ **Password manager — system AutoFill extension (F5, vault Slice 10).** `ASCredentialProviderExtension`
+  (+ passkeys) so credentials fill across all apps; relocate `LoginPayload` to `SurfrCore`. Apple-gated.
+- ☐ **Cross-device sync (F5/F6/F8) — AirDrop-first.** v1 is local-only (no server, no CloudKit);
+  cross-device arrives as an **encrypted AirDrop export** to the iOS app (items already per-item AEAD,
+  so it drops in without a rewrite). A CloudKit E2E private-DB sync is a possible later option, not v1.
 - ☐ **iOS app + `SurfrCore` extraction.** Everything is macOS-only so far; the data layers were
   written import-clean to move into a shared package later. The whole iOS target is unbuilt.
 - ☐ **Anti-adblock evasion (spec Phase 3).** Documented in `spec.md`, not built — bait-request
@@ -36,6 +37,13 @@
 
 ## C. Deferred polish & fixes
 
+- ☐ **Two-step new-login save-capture (vault, → v1.5).** Save-on-submit requires a non-empty adjacent
+  username, so a *genuinely new* two-step login (username page 1, password page 2) isn't captured (8c
+  still fills; manual add covers new ones). Needs stateful cross-page username-carry.
+- ☐ **Save dedup edge — same password, different/new account on one host.** The belt-and-suspenders
+  "password already stored for this host → no prompt" (which stops re-offering a just-filled credential)
+  also suppresses a *new* account that reuses an existing password on the same site. Add it manually;
+  revisit if it bites.
 - ☐ **Federated-login UX.** Trusting a site isn't enough if it logs in via a different provider —
   you must trust the IdP too. Consider auto-trusting a small set of common identity providers, or
   detecting OAuth chains.
@@ -67,6 +75,13 @@
   converts in seconds; the seed protects meanwhile. Cosmetic only.
 
 ## Recently completed (short-term context; pruned over time)
+
+- ✓ **F5 password vault — Slices 1–8e** (`docs/vault-spec.md` §11). Argon2id/CryptoKit envelope crypto
+  (`SurfrCore`), GRDB store + lock state machine, master-password unlock + mandatory Recovery Kit,
+  Secure-Enclave biometric unlock, list/detail/add-edit, CSV import (LastPass/Bitwarden/Chrome/Safari),
+  password+passphrase generator (bundled EFF list), TOTP + native Google Authenticator migration, and
+  in-browser fill + save (8a detect/host-match/fill, 8c two-step, 8b save prompt, 8d rail badge, 8e
+  per-field native overlay). Remaining: Slice 9 + 10.
 
 - ✓ **Privacy Stage-1 (three wins).** (1) HTTPS-only by default — main-frame http upgraded to
   https; failure shows an interstitial with explicit per-site "continue insecurely" (no silent

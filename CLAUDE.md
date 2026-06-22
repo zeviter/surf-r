@@ -29,9 +29,15 @@ platforms (no Chromium/Gecko — Apple requires WebKit for third-party browsers 
 The macOS app is well past MVP: rail with host-grouped tabs + flyout, summon-only spotlight omnibox,
 bookmarks-on-new-tab, full-page History/Trusted-Sites/Shortcuts/Downloads surfaces, ad/tracker/
 cookie-consent blocking, pop-up gate, HTTPS-only, tracking-param stripping, persistent download
-history, and the hybrid trust model. See `docs/spec.md` (reality-first; §6 maps phases to
-DONE/REMAINING) and `docs/backlog.md`. **Remaining major work:** IP routing (F1), password vault +
-autofill (F5), CloudKit sync, `SurfrCore` extraction + iOS target, anti-adblock, anti-fingerprinting.
+history, and the hybrid trust model. **The F5 password vault is largely built** (`docs/vault-spec.md`
+§11 Slices 1–8e): Argon2id/CryptoKit vault, master + Secure-Enclave biometric unlock, Recovery Kit,
+list/detail/add-edit, CSV import, generator, TOTP (+ Google Authenticator migration), and **in-browser
+fill + save** (isolated-world detection, exact-host anti-leak, ⌘\ / rail badge / per-field overlay,
+own save prompt). Built in `SurfrCore` (crypto/store/TOTP/generator) + the macOS app target. See
+`docs/spec.md` (reality-first; §6 maps phases to DONE/REMAINING) and `docs/backlog.md`.
+**Remaining major work:** vault Slice 9 (security check) + Slice 10 (system AutoFill extension,
+Apple-gated) → then v1 is essentially complete; IP routing (F1); CloudKit→**AirDrop-first** sync;
+`SurfrCore` extraction completion + iOS target; anti-adblock; anti-fingerprinting.
 Still single-target macOS; data layers are written import-clean for the future `SurfrCore` move.
 
 ## Core architecture — the hybrid trust model

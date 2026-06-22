@@ -39,7 +39,7 @@ Status: ✓ done · ◐ partial · ☐ not started.
 | F7 | Organised history | ✓ | GRDB `HistoryStore` (indexed, substring search, date-grouped, 365-day auto-prune, local-only); full-page history surface. (`HistoryStore.swift`, `HistoryView.swift`.) |
 | F8 | Omnibox shortcut | ✓ | `⌘L` summons the spotlight overlay (or focuses the permanent new-tab box); URL-vs-DuckDuckGo parser; `Enter` = current tab, `⌘Enter` = new tab. (`Spotlight.swift`, `Omnibox.swift`.) |
 | F1 | IP obfuscation / routing | ☐ | Planned: per-app `WKWebsiteDataStore.proxyConfigurations` → SOCKS5 (Tor / self-hosted WireGuard) + WebRTC/DNS leak hardening. Not started. |
-| F5 | Password manager (vault + system autofill) | ☐ | Planned: CryptoKit/Keychain/Secure-Enclave vault, `ASCredentialProviderExtension`, passkeys. Not started. |
+| F5 | Password manager (vault + system autofill) | ◑ | **Largely built** (see `docs/vault-spec.md` §11): CryptoKit/Argon2id vault, master + Secure-Enclave biometric unlock, Recovery Kit, list/detail/add-edit, CSV import, generator, TOTP (+ Google Authenticator migration), and **in-browser fill + save** (Slices 1–8e). **Remaining:** Slice 9 (security check) and Slice 10 system AutoFill extension (`ASCredentialProviderExtension`, Apple-gated); passkeys are v2. |
 
 Privacy/UX features built **beyond** the original F-list (all ✓):
 - **HTTPS-only by default** with interstitial + explicit per-site override and visible insecure
@@ -190,19 +190,24 @@ page, drag-reorderable rail.
   `Surfr` target today; the data layers are already import-clean (no AppKit/SwiftUI/WebKit in
   `HistoryStore`/`BookmarkStore`/`DownloadStore`/`Omnibox`) to ease the move.
 
-### Phase 7 — Password vault (F5)
+### Phase 7 — Password vault (F5) — ✅ done
 - Encrypted store (CryptoKit AES-GCM; key wrapped by Secure Enclave / master password via Argon2id).
-  Generator + TOTP. Face/Touch ID gate. App Group shared with the autofill extension.
+  Generator + TOTP. Face/Touch ID gate. **Built** as `docs/vault-spec.md` Slices 1–7 (crypto, store,
+  master + biometric unlock, Recovery Kit, list/detail/add-edit, CSV import, generator, TOTP +
+  Google Authenticator migration). App Group sharing lands with the extension (Phase 8).
 
-### Phase 8 — System autofill (F5)
-- `ASCredentialProviderExtension` targets (iOS + macOS); QuickType + full UI; passkeys
-  (`ASPasskeyCredential`, iOS 17+). Fills detected login fields/QuickType/Safari, **not** the generic
-  context-menu on arbitrary text fields (Apple-private) — as with all third-party managers.
+### Phase 8 — Autofill (F5) — ◑ in-browser done; system extension remaining
+- **In-browser fill + save done** (vault-spec Slices 8a–8e): isolated-world detection, exact-host
+  anti-leak, ⌘\ / rail badge / per-field native-overlay icon, biometric+master fill, own save prompt.
+- **Remaining (Slice 10):** `ASCredentialProviderExtension` targets (iOS + macOS); QuickType + full UI;
+  passkeys (`ASPasskeyCredential`, iOS 17+). Fills detected login fields/QuickType/Safari, **not** the
+  generic context-menu on arbitrary text fields (Apple-private) — as with all third-party managers.
 
-### Phase 9 — Sync
-- CloudKit private DB, **end-to-end encrypted** (encrypt before upload) for vault, bookmarks,
-  settings. History stays local unless explicitly opted in. Conflict handling: last-write-wins +
-  per-record versioning.
+### Phase 9 — Sync (reframed AirDrop-first)
+- **v1: local-only, no server, no CloudKit.** Cross-device sharing arrives later as an **encrypted
+  export over AirDrop** to the iOS app (items are already AEAD-encrypted per-item, so it drops in
+  without a rewrite). A CloudKit private-DB (E2E, encrypt-before-upload) sync is a possible *later*
+  option, not the v1 path.
 
 ### Anti-fingerprinting (v2)
 - Canvas / timezone / client-hint surface spoofing. Scoped to v2 in the original plan. ☐
@@ -248,10 +253,18 @@ target reusing it, and add AutoFill / content-blocker / proxy extensions + Cloud
 ## 9. Security model (summary)
 Protects against: cross-site cookie tracking (ephemeral-by-default + per-site trust), ad/tracker
 requests and cookie-consent walls, unrequested pop-ups, insecure (http) connections (HTTPS-only),
-URL tracking params, and embedded-browser fingerprinting via UA. Will also protect (when built): IP
-exposure (F1) and vault theft (F5, E2E + Secure Enclave). Does **not** provide: anonymity/crowd-
-blending (a self-hosted exit is a static IP), defence against a malicious relay you don't control, or
-protection from on-device malware. State these honestly in any user-facing privacy copy.
+URL tracking params, embedded-browser fingerprinting via UA, and **vault theft** (F5 built: Argon2id
+KEK → AES-GCM envelope, Secure-Enclave-wrapped biometric key, key-zeroing on lock). Will also protect
+(when built): IP exposure (F1). Does **not** provide: anonymity/crowd-blending (a self-hosted exit is a
+static IP), defence against a malicious relay you don't control, or protection from on-device malware.
+
+**Vault — honest limitations** (see `docs/vault-spec.md` §13 + `docs/known-issues.md`): the vault has
+**no recovery backstop** — lose both the master password and the Recovery Kit and it's unrecoverable by
+design. **TOTP shares the vault**, so a single unlock exposes both factors (optional, disclosed). The
+in-browser autofill **never injects into page DOM** and offers credentials only on an exact
+registrable-host match with a real visible login form, but has documented gaps (dynamic shadow-DOM
+hide-on-close popups, cross-origin iframes, closed shadow roots). State these honestly in user-facing
+privacy copy.
 
 ## 10. Human-only steps
 Apple Developer enrolment, signing identities/certs, first-time capability prompts (CloudKit,

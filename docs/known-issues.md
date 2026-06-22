@@ -35,6 +35,12 @@ Parked edge cases — documented for transparency, not scheduled for a fix yet.
 | Cross-origin iframe logins | A login form in a **cross-origin iframe** isn't filled (detection runs per-frame but matching/fill is main + same-origin only). | Low | Deferred from 8a; documented. |
 | Closed shadow-root logins | Fields inside a **closed** shadow root are invisible to detection/fill (only open roots are pierced). | Low | Inherent — closed roots are inaccessible by design. |
 
+## Vault import — junk hosts (`Surfr/Surfr/CSVImport.swift`, `VaultGate`)
+
+| Issue | Current behaviour | Severity | Notes / workaround |
+|---|---|---|---|
+| Junk `item_hosts` from messy imports | Some imported rows can carry a non-sensible registrable domain (e.g. `sn`, or an empty string from a URL that didn't parse), so the item won't match any real site for autofill. The `loadItems` repair normalizes/recovers hosts from the payload URL where possible, but can't invent a host that was never present. | Low — affects autofill match for those rows only | Edit the item's website to fix the host. **Planned cleanup: vault Slice 9** (surface + fix junk hosts as part of the security/health check). |
+
 ## Save-on-submit (`Surfr/Surfr/Autofill.js`, Slice 8b)
 
 | Issue | Current behaviour | Severity | Notes / workaround |

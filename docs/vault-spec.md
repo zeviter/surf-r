@@ -262,14 +262,20 @@ Two distinct fill paths, sharing the vault but driven differently.
 - **macOS vs iOS.** Same API surface; QuickType *bar* is iOS, macOS surfaces autocomplete. On macOS,
   Safari uses the system AutoFill provider, so the extension covers Safari natively.
 
-### Path B — In-browser (surf-r's own WKWebView)
-- A document-start **`WKUserScript`** detects `input[type=password]`, `autocomplete="username"` /
-  `"current-password"` fields and reports field metadata via a **`WKScriptMessageHandler`**.
-- surf-r matches the host → ranks credentials by recency → shows an **inline suggestion in its own UI**
-  (keyboard-first; a ⌘-shortcut summons for the current host), gated by biometrics.
-- Fills via JS, then drives surf-r's **own** save-credential prompt. **WKWebView caveat:** native
-  Password AutoFill fills sometimes but the system "save password" prompt usually doesn't fire — hence
-  Path B owns its save UI for surf-r's surfaces.
+### Path B — In-browser (surf-r's own WKWebView) — **as-built (Slices 8a–8e)**
+- A document-start **`WKUserScript`** in a dedicated **isolated `WKContentWorld`** (the page can't
+  read/override/observe it) detects login fields and reports **structure only** (no values) via a
+  **`WKScriptMessageHandler`**. Visibility is computed across the **composed tree** (pierces open shadow
+  roots). Username-first (two-step) pages are detected with weighted signals.
+- surf-r matches the page frame's **exact registrable domain** against the vault (anti-leak: never a
+  look-alike, suffix-attack, or `http://`), ranks by recency, and offers via three entry points — **⌘\**,
+  a **rail availability badge**, and a **per-field native-overlay key icon** (drawn over the web view,
+  not in page DOM) — all routing through one shared **on-demand detect-at-press** + fill path.
+- Fill is **biometric-gated, with a master-password fallback** (never a dead end); fills via
+  `callAsyncJavaScript` in the isolated world (password passed as an argument, never the clipboard).
+- **Save/update** is surf-r's **own** prompt (WKWebView's system "save" rarely fires), driven by a
+  **tight gesture-based capture** — a real submit gesture of a form with exactly one visible password +
+  adjacent username (multi-password change/signup excluded); options **Save / Not now / Never**.
 
 > **Slice 8a as-built (detect + host-match + fill; save is 8b).** The two load-bearing concerns:
 >
@@ -540,22 +546,28 @@ invisible risk visible without nagging.
 Vertical, each buildable/testable on the Mac before the next; crypto + storage land first as headless,
 unit-tested cores; UI follows; the Apple-gated extension lands last in v1.
 
-| # | Slice | Ships · verified by | Effort |
-|----|----|----|----|
-| 1 | **Crypto core** | Argon2id vendoring + key hierarchy + seal/open. Headless; unit tests for wrap/unwrap, tamper detection, master-pw-change re-wrap. | med |
-| 2 | Vault store + lock state | GRDB encrypted `items`; LOCKED/UNLOCKED machine; key-zeroing on lock. Tests for round-trip + lock eviction. | low |
-| 3 | Master-pw unlock + Recovery Kit | First-run set-master, master unlock UI, mandatory Recovery Kit PDF. Verify recovery resets a "forgotten" master. | med |
-| 4 | Biometric unlock | SE-wrapped copy, `LAContext`, `.biometryCurrentSet`. **Hardware-tested** (no SE in Simulator). | med |
-| 5 | Vault list · detail · add/edit | The `PageScaffold` surfaces (WF-4/5/6). Favicons via existing service. | med |
-| 5b | **CSV import** (next, before Generator) | Import LastPass / 1Password / Bitwarden / browser CSV exports. Column-mapping layer → bulk encrypt-and-store via the Slice 5 item API. **Plaintext-file discipline:** parse offline, never cache/log the CSV, prompt the user to delete the file after. LastPass CSVs omit TOTP seeds → flag those items for manual re-add in Slice 7. | med |
-| 6 | Generator | Random + passphrase, entropy readout, inline + standalone (WF-6). | low |
-| 7 | TOTP | otpauth import (paste + QR), RFC 6238, countdown UI. | low |
-| 8 | In-browser fill + save | `WKUserScript` field detection, inline suggestion (WF-7), own save prompt (WF-8). | med |
-| 9 | Security check | Local weak/reused/2FA-available surface (WF-9). | low |
-| 10 | System AutoFill extension | `ASCredentialProviderExtension` + identity-store index + biometric gate. Needs Apple-Dev enrolment + entitlements (§12). | high |
+Status through 2026-06: **Slices 1–8 done** (8 expanded into 8a–8e — see below); **9–10 remain**.
 
-**v1.5** — Encrypted AirDrop export/import to the iOS app. **v2** — Passkeys (`ASPasskeyCredential`);
-schema already accommodates.
+| # | Slice | Status | Ships · verified by | Effort |
+|----|----|----|----|----|
+| 1 | **Crypto core** | ✅ done | Argon2id vendoring + key hierarchy + seal/open. Headless; unit tests for wrap/unwrap, tamper detection, master-pw-change re-wrap. | med |
+| 2 | Vault store + lock state | ✅ done | GRDB encrypted `items`; LOCKED/UNLOCKED machine; key-zeroing on lock. Tests for round-trip + lock eviction. | low |
+| 3 | Master-pw unlock + Recovery Kit | ✅ done | First-run set-master, master unlock UI, mandatory Recovery Kit PDF. Verify recovery resets a "forgotten" master. | med |
+| 4 | Biometric unlock | ✅ done | SE-wrapped copy, `LAContext`, `.biometryCurrentSet`. **Hardware-tested** (no SE in Simulator). | med |
+| 5 | Vault list · detail · add/edit | ✅ done | The `PageScaffold` surfaces (WF-4/5/6). Favicons via existing service. | med |
+| 5b | **CSV import** | ✅ done | LastPass / Bitwarden / Chrome / Safari CSV (auto-detected); column-mapping → bulk atomic encrypt-and-store. Plaintext-file discipline (read-once, prompt-to-delete). 1Password + manual mapping deferred. | med |
+| 6 | Generator | ✅ done | Random + passphrase, direct-entropy readout, inline popover (WF-6). Bundled EFF wordlist (CC-BY). | low |
+| 7 | TOTP | ✅ done | `otpauth://` import (paste + QR-from-image), **native Google Authenticator `otpauth-migration://`** decode, RFC-6238, countdown UI. | low |
+| 8a | In-browser detect + host-match + fill | ✅ done | Isolated-world `WKContentWorld` detection (structure-only), exact-registrable-host anti-leak, on-demand detect-at-press, inline picker (WF-7), ⌘\. | med |
+| 8c | Two-step / username-first fill | ✅ done | Username-only page detection (weighted: autocomplete strong, bare-email needs login context), fill username on page 1. | low |
+| 8b | Save / update prompt | ✅ done | surf-r's own save bar (WF-8); gesture-based capture (tight: single visible password + adjacent username; multi-password excluded); Save / Not now / Never. | med |
+| 8d | Rail availability badge | ✅ done | Host-level "saved login available" key on the rail tile (native chrome), all tab states. | low |
+| 8e | Per-field native-overlay icon | ✅ done | Key icon adjacent to each field (native overlay, not page DOM); amber=available / green=surf-r-filled; master-password fill fallback. | med |
+| 9 | Security check | ☐ remaining | Local weak/reused/2FA-available surface (WF-9); junk-host import hygiene. | low |
+| 10 | System AutoFill extension | ☐ remaining | `ASCredentialProviderExtension` + identity-store index + biometric gate; relocate `LoginPayload` to `SurfrCore`. Needs Apple-Dev enrolment + entitlements (§12). | high |
+
+**v1.5** — Encrypted AirDrop export/import to the iOS app; **two-step new-login save-capture** (stateful
+cross-page username-carry). **v2** — Passkeys (`ASPasskeyCredential`); schema already accommodates.
 
 **Start with Slice 1** (headless crypto core) — highest-risk, highest-leverage, no UI dependencies;
 getting the key hierarchy right unblocks everything else.
