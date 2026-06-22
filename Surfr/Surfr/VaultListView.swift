@@ -47,6 +47,7 @@ struct VaultListView: View {
     @State private var regeneratedCode: String?
     @State private var searchFocusToken = 0
     @StateObject private var importer = ImportCoordinator()
+    @StateObject private var totpImporter = TOTPImportCoordinator()
 
     var body: some View {
         content
@@ -65,6 +66,10 @@ struct VaultListView: View {
             .sheet(isPresented: Binding(get: { importer.isActive },
                                         set: { if !$0 { importer.finish() } })) {
                 VaultImportSheet(coordinator: importer)
+            }
+            .sheet(isPresented: Binding(get: { totpImporter.isActive },
+                                        set: { if !$0 { totpImporter.finish() } })) {
+                TOTPImportSheet(coordinator: totpImporter)
             }
     }
 
@@ -152,6 +157,9 @@ struct VaultListView: View {
 
             Button { importer.pickAndParse() } label: { Label("Import…", systemImage: "square.and.arrow.down") }
                 .help("Import logins from a LastPass / Bitwarden / Chrome / Safari CSV export")
+
+            Button { totpImporter.pickImage(gate: gate) } label: { Label("Import 2FA…", systemImage: "qrcode") }
+                .help("Import one-time codes from a Google Authenticator export QR (or otpauth:// link)")
 
             Button {
                 Task { regeneratedCode = await gate.regenerateRecoveryKit() }

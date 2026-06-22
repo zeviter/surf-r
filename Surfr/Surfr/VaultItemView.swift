@@ -11,7 +11,7 @@ final class VaultItemDetailModel: ObservableObject {
     @Published private(set) var username = ""
     @Published private(set) var website = ""
     @Published private(set) var notes = ""
-    @Published private(set) var hasTOTP = false
+    @Published private(set) var totp: TOTP?             // parsed from payload.totp; nil = none
     @Published private(set) var revealed: String?       // nil = masked
     @Published private(set) var loadFailed = false
     /// When biometric reveal is cancelled/unavailable, the view shows a master-password fallback (6a).
@@ -29,7 +29,7 @@ final class VaultItemDetailModel: ObservableObject {
         username = payload.username
         website = payload.urls.first ?? hosts.first?.host ?? ""
         notes = payload.notes
-        hasTOTP = (payload.totp?.isEmpty == false)
+        totp = payload.totp.flatMap { TOTP(otpauthURI: $0) }
         password = WipeableSecret(payload.password)
         isWiped = false
     }
@@ -76,7 +76,7 @@ final class VaultItemDetailModel: ObservableObject {
     /// Zero the password buffer and clear all decrypted fields. Called on disappear.
     func wipe() {
         password.wipe()
-        username = ""; website = ""; notes = ""; revealed = nil; hasTOTP = false
+        username = ""; website = ""; notes = ""; revealed = nil; totp = nil
         awaitingMaster = false; masterError = false; pending = .none
         isWiped = true
     }
@@ -87,6 +87,23 @@ final class VaultItemDetailModel: ObservableObject {
 /// Lightweight wrapper so navigation can carry a `StoredItem` by value without making the SurfrCore
 /// type `Hashable`.
 struct StoredItemRef: Equatable { let stored: StoredItem }
+
+/// TOTP countdown ring (green, amber in the last 5 s).
+struct CountdownRing: View {
+    let remaining: Int
+    let period: Int
+    var body: some View {
+        ZStack {
+            Circle().stroke(Color.gray.opacity(0.25), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: CGFloat(remaining) / CGFloat(max(1, period)))
+                .stroke(remaining <= 5 ? Color.orange : Color.green, lineWidth: 2)
+                .rotationEffect(.degrees(-90))
+            Text("\(remaining)").font(.system(size: 9, design: .monospaced)).foregroundStyle(.secondary)
+        }
+        .frame(width: 22, height: 22)
+    }
+}
 
 struct VaultItemView: View {
     let item: StoredItem
@@ -122,12 +139,9 @@ struct VaultItemView: View {
 
                     passwordField
 
+                    if let totp = model.totp { totpSection(totp) }
                     if !model.website.isEmpty { field("Website", value: model.website) { EmptyView() } }
                     if !model.notes.isEmpty { field("Notes", value: model.notes) { EmptyView() } }
-                    if model.hasTOTP {
-                        Text("One-time code stored — display arrives in Slice 7.")
-                            .font(.caption).foregroundStyle(.tertiary)
-                    }
                 }
 
                 HStack {
@@ -194,6 +208,34 @@ struct VaultItemView: View {
             await model.submitMaster(pw, gate: gate)
             if !model.awaitingMaster { fallbackMaster = "" }   // cleared on success
         }
+    }
+
+    /// Live TOTP code + countdown ring. `TimelineView(.periodic)` only ticks while this view is on
+    /// screen, so navigating away stops it (no background timer); `model.wipe()` clears the secret.
+    private func totpSection(_ totp: TOTP) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("ONE-TIME CODE").font(.caption).bold().foregroundStyle(.secondary)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let code = totp.code(at: context.date)
+                let remaining = totp.secondsRemaining(at: context.date)
+                HStack(spacing: 10) {
+                    Text(Self.grouped(code)).font(.system(.title3, design: .monospaced)).textSelection(.enabled)
+                    Spacer()
+                    CountdownRing(remaining: remaining, period: totp.period)
+                    Button { VaultClipboard.copyConcealed(code) } label: { Image(systemName: "doc.on.doc") }
+                        .buttonStyle(.plain).help("Copy code")
+                }
+            }
+            .padding(8)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.gray.opacity(0.08)))
+        }
+    }
+
+    /// "123456" → "123 456" for readability (8-digit → "1234 5678").
+    private static func grouped(_ code: String) -> String {
+        let mid = code.count / 2
+        let i = code.index(code.startIndex, offsetBy: mid)
+        return "\(code[..<i]) \(code[i...])"
     }
 
     private func field<Trailing: View>(_ label: String, value: String,

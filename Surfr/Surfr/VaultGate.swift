@@ -362,6 +362,69 @@ final class VaultGate: ObservableObject {
         }
     }
 
+    /// A conservative auto-match suggestion for a TOTP entry → an existing login, used only to *offer*
+    /// an attach (never silent). Returns a match ONLY when exactly one item's title equals the issuer
+    /// or a host contains it; any ambiguity (0 or >1) → nil → default to create-new.
+    func suggestedMatchForTOTP(issuer: String) -> UUID? {
+        let iss = issuer.lowercased().trimmingCharacters(in: .whitespaces)
+        guard !iss.isEmpty else { return nil }
+        let matches = items.filter { item in
+            item.title.lowercased() == iss || item.hosts.contains { $0.host.lowercased().contains(iss) }
+        }
+        return matches.count == 1 ? matches[0].id : nil
+    }
+
+    /// Import TOTP entries (from paste / QR / GAuth migration). Each decision either ATTACHES the seed
+    /// to an existing login (only when the user confirmed the offered match) or CREATES a new
+    /// TOTP-only item. Encrypt under fresh per-item keys, store in one atomic transaction.
+    func importTOTP(_ decisions: [TOTPImportDecision]) async -> ImportSummary {
+        guard let store, phase == .unlocked, !decisions.isEmpty else {
+            return ImportSummary(imported: 0, skippedDuplicates: 0, failed: decisions.isEmpty ? false : true)
+        }
+        isWorking = true; defer { isWorking = false }
+
+        // Pre-decrypt the items we'll attach to.
+        var attachTargets: [UUID: (item: StoredItem, payload: LoginPayload)] = [:]
+        for d in decisions {
+            guard let id = d.attachTo, attachTargets[id] == nil, let it = items.first(where: { $0.id == id }),
+                  let p = decryptPayload(it) else { continue }
+            attachTargets[id] = (it, p)
+        }
+        let now = Date()
+        do {
+            let toStore: [StoredItem] = try lock.withVaultKey { key in
+                var out: [StoredItem] = []
+                for d in decisions {
+                    let uri = d.totp.otpauthURI()
+                    if let id = d.attachTo, let target = attachTargets[id] {
+                        var payload = target.payload
+                        payload.totp = uri
+                        var data = try payload.encoded()
+                        let sealed = try VaultCrypto.encryptNewItem(data, vaultKey: key)
+                        data.resetBytes(in: 0..<data.count)
+                        out.append(StoredItem(id: target.item.id, type: target.item.type, title: target.item.title,
+                                              createdAt: target.item.createdAt, modifiedAt: now, sealed: sealed,
+                                              hosts: target.item.hosts, healthFlags: target.item.healthFlags))
+                    } else {
+                        let title = d.totp.issuer.isEmpty ? d.totp.account : d.totp.issuer
+                        var data = try LoginPayload(totp: uri).encoded()
+                        let sealed = try VaultCrypto.encryptNewItem(data, vaultKey: key)
+                        data.resetBytes(in: 0..<data.count)
+                        out.append(StoredItem(title: title.isEmpty ? "One-time code" : title,
+                                              createdAt: now, modifiedAt: now, sealed: sealed, hosts: []))
+                    }
+                }
+                return out
+            }
+            try await store.upsertMany(toStore)
+            await loadItems()
+            return ImportSummary(imported: toStore.count, skippedDuplicates: 0, failed: false)
+        } catch {
+            lastError = "Couldn’t import the one-time codes — nothing was changed."
+            return ImportSummary(imported: 0, skippedDuplicates: 0, failed: true)
+        }
+    }
+
     /// Exact-match fingerprint across ALL fields (so different-password rows are distinct). Hashed so
     /// no plaintext lingers in the dedupe set.
     private static func fingerprint(title: String, hosts: [SurfrCore.Host], payload: LoginPayload) -> String {

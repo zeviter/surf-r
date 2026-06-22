@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import SurfrCore
 
 /// Add or edit a login (WF-6). The generator popover lands in Slice 6 — for now the password uses the
@@ -14,6 +16,7 @@ struct VaultEditView: View {
     @State private var password = ""
     @State private var website = ""
     @State private var notes = ""
+    @State private var totpURI = ""
     @State private var loaded = false
 
     private var isNew: Bool { existing == nil }
@@ -30,6 +33,15 @@ struct VaultEditView: View {
                 labeled("Notes") {
                     TextEditor(text: $notes).frame(height: 80)
                         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.gray.opacity(0.3)))
+                }
+                labeled("One-time code (TOTP)") {
+                    HStack {
+                        TextField("otpauth://… or leave blank", text: $totpURI).textFieldStyle(.roundedBorder)
+                        Button("Scan image…") { scanTOTPImage() }
+                    }
+                    if !totpURI.isEmpty, TOTP(otpauthURI: totpURI) == nil {
+                        Text("Not a valid otpauth:// link.").font(.caption).foregroundStyle(.red)
+                    }
                 }
 
                 HStack {
@@ -52,21 +64,33 @@ struct VaultEditView: View {
             password = payload.password
             website = payload.urls.first ?? existing.hosts.first?.host ?? ""
             notes = payload.notes
+            totpURI = payload.totp ?? ""
             loaded = true
         }
     }
 
     private func save() async {
+        let trimmedTOTP = totpURI.trimmingCharacters(in: .whitespacesAndNewlines)
         let payload = LoginPayload(username: username, password: password, notes: notes,
-                                   totp: existingTOTP, urls: website.isEmpty ? [] : [website])
+                                   totp: trimmedTOTP.isEmpty ? nil : trimmedTOTP,
+                                   urls: website.isEmpty ? [] : [website])
         await gate.saveItem(id: existing?.id, title: title, payload: payload, hosts: derivedHosts())
         onDone()
     }
 
-    /// Preserve any existing TOTP seed across an edit (TOTP UI is Slice 7).
-    private var existingTOTP: String? {
-        guard let existing, let p = gate.decryptPayload(existing) else { return nil }
-        return p.totp
+    /// Scan a QR image into the TOTP field (first otpauth:// found).
+    private func scanTOTPImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.png, .jpeg, .tiff, .image]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        var data = (try? Data(contentsOf: url, options: [.uncached])) ?? Data()
+        defer { data.resetBytes(in: 0..<data.count) }
+        if let first = QRDecoder.decodeQRStrings(imageData: data).lazy.compactMap({ TOTPImportCoordinator.decodeTOTPs(from: $0).first }).first {
+            totpURI = first.otpauthURI()
+        }
     }
 
     /// Derive the registrable host from the website field for `item_hosts` (drives favicon + fill).

@@ -187,6 +187,50 @@ final class VaultItemsTests: XCTestCase {
         XCTAssertEqual(passwords, ["first", "second"])
     }
 
+    // MARK: - TOTP import (Slice 7)
+
+    private func sampleTOTP(issuer: String, account: String) -> TOTP {
+        TOTP(secret: Data("12345678901234567890".utf8), issuer: issuer, account: account)
+    }
+
+    func test_totpImport_createNewItem() async {
+        let gate = await unlockedGate()
+        let s = await gate.importTOTP([TOTPImportDecision(totp: sampleTOTP(issuer: "GitHub", account: "alice"),
+                                                          suggestion: nil, attachTo: nil)])
+        XCTAssertEqual(s.imported, 1)
+        XCTAssertEqual(gate.items.count, 1)
+        XCTAssertEqual(gate.items[0].title, "GitHub")
+        XCTAssertNotNil(gate.decryptPayload(gate.items[0])?.totp)
+    }
+
+    func test_totpImport_attachToExisting_preservesFields() async {
+        let gate = await unlockedGate()
+        await gate.saveItem(id: nil, title: "GitHub", payload: LoginPayload(username: "u", password: "p"),
+                            hosts: [SurfrCore.Host(host: "github.com", isPrimary: true)])
+        let existing = gate.items[0]
+        let s = await gate.importTOTP([TOTPImportDecision(totp: sampleTOTP(issuer: "GitHub", account: "u"),
+                                                          suggestion: existing.id, attachTo: existing.id)])
+        XCTAssertEqual(s.imported, 1)
+        XCTAssertEqual(gate.items.count, 1, "attached, not a new item")
+        let p = gate.decryptPayload(gate.items.first { $0.id == existing.id }!)
+        XCTAssertNotNil(p?.totp)
+        XCTAssertEqual(p?.password, "p", "existing password preserved on attach")
+    }
+
+    func test_suggestedMatch_exactlyOneOrNil() async {
+        let gate = await unlockedGate()
+        await gate.saveItem(id: nil, title: "GitHub", payload: LoginPayload(password: "p"),
+                            hosts: [SurfrCore.Host(host: "github.com", isPrimary: true)])
+        XCTAssertNotNil(gate.suggestedMatchForTOTP(issuer: "GitHub"))     // title match
+        XCTAssertNil(gate.suggestedMatchForTOTP(issuer: "Nonexistent"))
+        XCTAssertNil(gate.suggestedMatchForTOTP(issuer: ""))
+    }
+
+    func test_decodeTOTPs_migrationAndSingle() {
+        XCTAssertEqual(TOTPImportCoordinator.decodeTOTPs(from: "otpauth://totp/X?secret=JBSWY3DPEHPK3PXP").count, 1)
+        XCTAssertTrue(TOTPImportCoordinator.decodeTOTPs(from: "not a uri").isEmpty)
+    }
+
     func test_lockClearsItems() async {
         let gate = await unlockedGate()
         await gate.saveItem(id: nil, title: "X", payload: LoginPayload(password: "p"), hosts: [])
