@@ -17,9 +17,12 @@ final class VaultItemDetailModel: ObservableObject {
     /// When biometric reveal is cancelled/unavailable, the view shows a master-password fallback (6a).
     @Published var awaitingMaster = false
     @Published var masterError = false
+    /// Transient "… copied" confirmation shown after any copy.
+    @Published var copyConfirmation: String?
 
     private var password = WipeableSecret("")
     private(set) var isWiped = false
+    private var copyClearTask: Task<Void, Never>?
 
     private enum Pending { case none, reveal, copy }
     private var pending: Pending = .none
@@ -68,10 +71,23 @@ final class VaultItemDetailModel: ObservableObject {
     private func perform(_ action: Pending) {
         switch action {
         case .reveal: revealed = password.reveal()
-        case .copy: VaultClipboard.copyConcealed(password.reveal())
+        case .copy: VaultClipboard.copyConcealed(password.reveal()); noteCopied("Password")
         case .none: break
         }
     }
+
+    /// Show a brief "… copied" confirmation (any field). Auto-clears after ~1.5 s.
+    func noteCopied(_ label: String) {
+        copyConfirmation = "\(label) copied"
+        copyClearTask?.cancel()
+        copyClearTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if !Task.isCancelled { self?.copyConfirmation = nil }
+        }
+    }
+
+    func copyUsername() { VaultClipboard.copyPlain(username); noteCopied("Username") }
+    func copyCode(_ code: String) { VaultClipboard.copyConcealed(code); noteCopied("Code") }
 
     /// Zero the password buffer and clear all decrypted fields. Called on disappear.
     func wipe() {
@@ -133,7 +149,7 @@ struct VaultItemView: View {
                         .foregroundStyle(.red)
                 } else {
                     field("Username", value: model.username) {
-                        Button { VaultClipboard.copyPlain(model.username) } label: { Image(systemName: "doc.on.doc") }
+                        Button { model.copyUsername() } label: { Image(systemName: "doc.on.doc") }
                             .buttonStyle(.plain).help("Copy username")
                     }
 
@@ -155,6 +171,17 @@ struct VaultItemView: View {
             .frame(maxWidth: 560, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
+        .overlay(alignment: .bottom) {
+            if let msg = model.copyConfirmation {
+                Label(msg, systemImage: "checkmark.circle.fill")
+                    .font(.callout).padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.green.opacity(0.4)))
+                    .padding(.bottom, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: model.copyConfirmation)
         .task { model.load(StoredItemRef(stored: item), gate: gate) }
         .onDisappear { model.wipe() }   // zero decrypted plaintext on close
         .confirmationDialog("Delete this login?", isPresented: $confirmingDelete) {
@@ -222,7 +249,7 @@ struct VaultItemView: View {
                     Text(Self.grouped(code)).font(.system(.title3, design: .monospaced)).textSelection(.enabled)
                     Spacer()
                     CountdownRing(remaining: remaining, period: totp.period)
-                    Button { VaultClipboard.copyConcealed(code) } label: { Image(systemName: "doc.on.doc") }
+                    Button { model.copyCode(code) } label: { Image(systemName: "doc.on.doc") }
                         .buttonStyle(.plain).help("Copy code")
                 }
             }

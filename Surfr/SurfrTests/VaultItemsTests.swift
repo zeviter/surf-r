@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 import SurfrCore
 @testable import Surfr
 
@@ -9,6 +10,14 @@ final class LoginPayloadTests: XCTestCase {
                              totp: "otpauth://totp/x", urls: ["https://a.example"],
                              custom: ["k": "v"])
         XCTAssertEqual(try LoginPayload.decoded(from: try p.encoded()), p)
+    }
+
+    func test_copyUsername_landsAndConfirms() {
+        let model = VaultItemDetailModel()
+        model.load(payload: LoginPayload(username: "alice@example.com", password: "p"), hosts: [])
+        model.copyUsername()
+        XCTAssertEqual(model.copyConfirmation, "Username copied")
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), "alice@example.com", "username must actually land on the clipboard")
     }
 
     func test_detailModel_wipeClearsPlaintext() {

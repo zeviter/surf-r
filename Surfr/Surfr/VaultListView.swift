@@ -49,8 +49,30 @@ struct VaultListView: View {
     @StateObject private var importer = ImportCoordinator()
     @StateObject private var totpImporter = TOTPImportCoordinator()
 
+    @State private var restoredItem = false
+
     var body: some View {
         content
+            // Restore where the user was (search + open item) after navigate-away recreated the surface.
+            .onAppear {
+                query = gate.savedVaultQuery
+                if let id = gate.savedVaultOpenItemID, gate.items.contains(where: { $0.id == id }) {
+                    mode = .detail(id); restoredItem = true
+                }
+            }
+            .onChange(of: gate.items) { _, items in   // open item may only be available after async load
+                guard !restoredItem, mode == .list, let id = gate.savedVaultOpenItemID,
+                      items.contains(where: { $0.id == id }) else { return }
+                restoredItem = true; mode = .detail(id)
+            }
+            .onChange(of: query) { _, q in gate.savedVaultQuery = q }
+            .onChange(of: mode) { _, m in
+                switch m {
+                case .detail(let id): gate.savedVaultOpenItemID = id
+                case .edit(let id): gate.savedVaultOpenItemID = id
+                case .list: gate.savedVaultOpenItemID = nil
+                }
+            }
             // Back-nav inside the vault: ⌘← (menu) and ⌘[ / swipe / side-button (routed via .goBack
             // for internal surfaces) all pop detail/edit → list.
             .onReceive(NotificationCenter.default.publisher(for: .goBack)) { _ in goBack() }
@@ -59,18 +81,39 @@ struct VaultListView: View {
                 Button("") { searchFocusToken += 1 }
                     .keyboardShortcut("f", modifiers: .command).opacity(0)
             }
-            .sheet(item: Binding(get: { regeneratedCode.map(IdentifiedCode.init) },
-                                 set: { regeneratedCode = $0?.value })) { wrapped in
-                RegeneratedKitSheet(code: wrapped.value) { regeneratedCode = nil }
+            // ONE sheet modifier — multiple `.sheet`s on a single view conflict in SwiftUI (the 3rd
+            // broke the TOTP done/failed phases from rendering: missing delete prompt / no error).
+            .sheet(item: Binding(get: { activeSheet }, set: { if $0 == nil { dismissSheets() } })) { sheet in
+                switch sheet {
+                case .regenerate(let code): RegeneratedKitSheet(code: code) { regeneratedCode = nil }
+                case .csvImport: VaultImportSheet(coordinator: importer)
+                case .totpImport: TOTPImportSheet(coordinator: totpImporter)
+                }
             }
-            .sheet(isPresented: Binding(get: { importer.isActive },
-                                        set: { if !$0 { importer.finish() } })) {
-                VaultImportSheet(coordinator: importer)
+    }
+
+    private enum ActiveSheet: Identifiable {
+        case regenerate(String), csvImport, totpImport
+        var id: String {
+            switch self {
+            case .regenerate: return "regenerate"
+            case .csvImport:  return "csvImport"
+            case .totpImport: return "totpImport"
             }
-            .sheet(isPresented: Binding(get: { totpImporter.isActive },
-                                        set: { if !$0 { totpImporter.finish() } })) {
-                TOTPImportSheet(coordinator: totpImporter)
-            }
+        }
+    }
+
+    private var activeSheet: ActiveSheet? {
+        if let code = regeneratedCode { return .regenerate(code) }
+        if importer.isActive { return .csvImport }
+        if totpImporter.isActive { return .totpImport }
+        return nil
+    }
+
+    private func dismissSheets() {
+        regeneratedCode = nil
+        importer.finish()
+        totpImporter.finish()
     }
 
     private func goBack() {

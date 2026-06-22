@@ -117,6 +117,7 @@ final class VaultGate: ObservableObject {
         biometricInvalidated = false
         try? await store?.wipeAll()
         items = []
+        savedVaultQuery = ""; savedVaultOpenItemID = nil
         pendingMaster?.wipe(); pendingRecovery?.wipe()
         pendingMaster = nil; pendingRecovery = nil; pendingMeta = nil
         reducer = FirstRunReducer()
@@ -264,6 +265,7 @@ final class VaultGate: ObservableObject {
     func lockNow() {
         lock.lock()
         items = []
+        savedVaultQuery = ""; savedVaultOpenItemID = nil   // reset UI state at the security boundary
         if phase == .unlocked { phase = .locked }
     }
 
@@ -273,6 +275,11 @@ final class VaultGate: ObservableObject {
 
     /// Cleartext metadata only (title/host/dates/health) — drives the list with **no decryption**.
     @Published private(set) var items: [StoredItem] = []
+
+    /// Vault UI state that must survive the surface being recreated on navigate-away-and-back (the
+    /// surface is ephemeral). Restored by `VaultListView`. Cleared on lock/reset.
+    var savedVaultQuery = ""
+    var savedVaultOpenItemID: UUID?
 
     /// (Re)load the list. Only the cleartext metadata is read; payloads stay encrypted on disk.
     func loadItems() async {
