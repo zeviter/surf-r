@@ -40,6 +40,8 @@ Status: ✓ done · ◐ partial · ☐ not started.
 | F8 | Omnibox shortcut | ✓ | `⌘L` summons the spotlight overlay (or focuses the permanent new-tab box); URL-vs-DuckDuckGo parser; `Enter` = current tab, `⌘Enter` = new tab. (`Spotlight.swift`, `Omnibox.swift`.) |
 | F1 | IP obfuscation / routing | ☐ | Planned: per-app `WKWebsiteDataStore.proxyConfigurations` → SOCKS5 (Tor / self-hosted WireGuard) + WebRTC/DNS leak hardening. Not started. |
 | F5 | Password manager (vault + system autofill) | ◑ | **Largely built** (see `docs/vault-spec.md` §11): CryptoKit/Argon2id vault, master + Secure-Enclave biometric unlock, Recovery Kit, list/detail/add-edit, CSV import, generator, TOTP (+ Google Authenticator migration), and **in-browser fill + save** (Slices 1–8e). **Remaining:** Slice 9 (security check) and Slice 10 system AutoFill extension (`ASCredentialProviderExtension`, Apple-gated); passkeys are v2. |
+| F9 | Incognito mode (no-local-trace session, trust suspended) | ☐ | **MVP/v1 — scope only, design before slicing.** surf-r is already ephemeral-by-default for web state, so incognito is *not* another ephemeral toggle: it additionally leaves **no local trace** (no History / Downloads-history / favicon-cache writes, no bookmark-capture prompts) and **suspends trust** (trusted domains stay `nonPersistent` — no login/SSO persistence), with a clear, honest active-state indicator. Last-v1 surface alongside anti-fingerprinting (§6). |
+| F10 | Anti-fingerprinting (two modes: Standard / Randomized) | ☐ | **v1 — designed, not built; lands after vault Slice 10.** Baseline = present as **stock Safari on WebKit** (large crowd) + ephemeral-by-default + engage WebKit's native AFP/ITP. **Standard** (default) adds zero entropy; **Randomized** (opt-in) injects deterministic, bucketed farbling on canvas/WebGL/WebAudio + high-entropy clamps in the existing isolated `WKContentWorld`, seeded per (registrable domain × visit session), with a trusted-site stable-fingerprint exemption. Honest tradeoff: Randomized can *increase* uniqueness. Full design + build tiers (FP-0/1/2) in §6. |
 
 Privacy/UX features built **beyond** the original F-list (all ✓):
 - **HTTPS-only by default** with interstitial + explicit per-site override and visible insecure
@@ -209,8 +211,87 @@ page, drag-reorderable rail.
   without a rewrite). A CloudKit private-DB (E2E, encrypt-before-upload) sync is a possible *later*
   option, not the v1 path.
 
-### Anti-fingerprinting (v2)
-- Canvas / timezone / client-hint surface spoofing. Scoped to v2 in the original plan. ☐
+### v1 finish line — sequencing
+After the vault is complete (**Slice 9** security check → **Slice 10** system AutoFill extension), the
+**last two v1 surfaces** are **Incognito mode** and **Anti-fingerprinting**, below. Both are
+**design-pass-then-slice** (scope recorded here; design before slicing) and they **interlock at the
+trust / Randomized boundary** — incognito suspends trust, which removes the Randomized trusted-site
+exemption. Their relative order within this final block is **open** (note, don't resolve).
+
+### Incognito mode (F9, v1 — MVP) — scope only, design before slicing
+☐ not started. **MVP-critical.** Recorded as scope + open questions (mirrors the C3 earmark style);
+**do not design or slice yet.**
+
+- **Definition (load-bearing).** surf-r is **already ephemeral-by-default** for web state, so incognito
+  is **not** another ephemeral-web toggle. Incognito = a session that *additionally* leaves **no local
+  trace** and **suspends trust**:
+  - No **History** entries written (`HistoryStore` suppressed).
+  - No **Downloads-history** entries (the file still downloads if chosen, but is not logged).
+  - No **favicon-cache** writes; no **bookmark-capture** prompts.
+  - **Trust suspended** — trusted domains do **not** use the persistent shared store; everything stays
+    `nonPersistent`, so no login/SSO persistence is written. (Therefore the Randomized-mode trusted
+    exemption does **not** apply in incognito — Randomized, if on, applies fully.)
+  - **Clear visual indication** that incognito is active, honest about scope (still **not** anonymity —
+    network / ISP / site still see the user).
+- **Open questions (record, don't resolve):**
+  - Separate incognito **window** (own `BrowserState` + ephemeral everything) vs in-place mode toggle.
+    *Lean:* separate window, given the chromeless single-window + rail model.
+  - Visual indicator / rail treatment.
+  - Vault + autofill behaviour (vault still unlockable? *lean:* fill allowed, save-**capture** suppressed
+    so an incognito session writes no new creds unless explicit).
+  - Default fingerprint mode in incognito (honour the global; trust suspended → Randomized applies fully).
+  - Zero-trace verification: sentinel-grep / WAL discipline — confirm nothing persists.
+
+### Anti-fingerprinting (F10, v1 — last v1 surface, after Slice 10) — designed, not built
+☐ not started; **designed below, not built.** Promoted from v2 → v1.
+
+- **Positioning.** `WKWebView` **cannot** build a Tor-style uniform crowd (we can't rewrite the engine).
+  surf-r's baseline strength is that it already presents as **stock Safari on WebKit**, so users sit in
+  the large Safari/WebKit crowd, and ephemeral-by-default already breaks cross-session linkage. Two
+  user-selectable modes:
+  - **Standard (default, recommended).** Present as stock Safari, add **zero entropy**, ephemeral state,
+    engage WebKit's native AFP/ITP. Strategy = blend into the Safari crowd; defends against being
+    **singled out by uniqueness**.
+  - **Randomized (advanced, opt-in).** Deterministic "farbled" noise on the **passive surfaces AFP
+    doesn't already cover** (2D canvas / WebGL / WebAudio readback; plus high-entropy navigator/screen
+    clamps), injected **document-start in the existing isolated `WKContentWorld`** (reuse the autofill
+    injection seam). Defends against **cross-site / cross-session correlation**. Rules:
+    - **Seed** — deterministic per **(registrable domain × visit session)**. A *visit session* = the
+      lifetime of that host's tab group; when the host's last tab closes the seed is discarded. Result:
+      frame-to-frame consistent within one visit (no breakage), different across sites and sessions, and
+      **close-and-return yields a new fingerprint**.
+    - **Bucket, don't pure-randomize** — where raw noise would produce an implausible config, snap to a
+      plausible "one-of-few" value (Brave's lesson) so the fingerprint stays realistic.
+    - **Compose with the engine** — stack on whatever AFP already noises (FP-0 resolves what that is);
+      never collide.
+    - **Trusted-site exemption** — trusted sites present a **single stable fingerprint** (Standard
+      presentation) even when Randomized is globally on; they're already identified by login, and a
+      shifting fingerprint risks fraud / 2FA re-challenges. Trust is the boundary, consistent with the
+      rest of surf-r. (Suspended in incognito, where trust itself is off.)
+    - **Honest tradeoff (must be in user-facing copy)** — diverging from stock Safari can **increase**
+      uniqueness and may break some sites, so Randomized is opt-in and **never framed as a strict
+      upgrade**; Standard stays default. The toggle must not imply Randomized = strictly more private.
+- **MVP toggle scope.** A **global** Standard/Randomized setting. Per-site override → backlog (deferred;
+  no Brave-style per-site shields in v1).
+- **Build tiering (measurement-first — slice plan, ☐):**
+  - **FP-0 — Fingerprint measurement harness.** Probe surf-r's actual exposed surface (canvas / WebGL /
+    audio / screen / fonts / navigator / headers) in the isolated world and compare to stock Safari on
+    the same Tahoe build. Resolves how much Safari-26 AFP a third-party `WKWebView` actually inherits by
+    default (**UNVERIFIED today** — note explicitly), and whether `nonPersistent` stores already engage
+    private-browsing-grade protections. Baseline for all before/after measurement. No user-facing change.
+    **Build FIRST regardless of the rest.**
+  - **FP-1 — Standard-mode hardening.** Confirm UA adds no entropy; clamp reducible header entropy
+    (`Accept-Language`); verify surf-r adds nothing observable (custom schemes; the native autofill
+    overlay is already non-DOM, so clean); lean on the engine protections FP-0 confirms. Low breakage
+    risk.
+  - **FP-2 — Randomized mode.** The document-start farbling + clamps above, **gated behind FP-0 numbers**
+    proving it **reduces (not increases)** uniqueness; measured before/after; reviewable injection.
+- **Engine context (current — verify against current WebKit before relying on it).** Safari 26 ships
+  **Advanced Fingerprinting Protection** on by default in Safari — noise into canvas/WebGL/audio readback
+  for scripts it classifies as fingerprinters, plus screen/window-metric clamping and restricted
+  high-entropy / referrer / query-param access. **ITP** is inherited by all `WKWebView` browsers since
+  iOS 14. Third-party `WKWebView` inheritance of AFP is **not confirmed** and is exactly what FP-0
+  measures.
 
 ---
 
@@ -255,8 +336,20 @@ Protects against: cross-site cookie tracking (ephemeral-by-default + per-site tr
 requests and cookie-consent walls, unrequested pop-ups, insecure (http) connections (HTTPS-only),
 URL tracking params, embedded-browser fingerprinting via UA, and **vault theft** (F5 built: Argon2id
 KEK → AES-GCM envelope, Secure-Enclave-wrapped biometric key, key-zeroing on lock). Will also protect
-(when built): IP exposure (F1). Does **not** provide: anonymity/crowd-blending (a self-hosted exit is a
-static IP), defence against a malicious relay you don't control, or protection from on-device malware.
+(when built): IP exposure (F1); **device fingerprinting** (F10); **local-trace forensics** (F9
+incognito). Does **not** provide: anonymity/crowd-blending (a self-hosted exit is a static IP), defence
+against a malicious relay you don't control, or protection from on-device malware.
+
+**Anti-fingerprinting — honest framing** (F10, §6): the claim is *"present as stock Safari + clear state
+each session + add no entropy + engage WebKit's native protections, optionally randomized"* — **not**
+Tor-grade anonymity or a uniform crowd. Standard mode blends into the Safari/WebKit crowd; Randomized
+mode trades that blend for cross-site/cross-session correlation resistance and **can increase
+uniqueness** and break some sites, so it is opt-in and never framed as a strict upgrade. Same
+structural-not-aspirational rule as "green = surf-r filled this".
+
+**Incognito — honest framing** (F9, §6): incognito leaves **no local trace** and **suspends trust** for
+the session; it is **not anonymity** — the network, ISP, and visited sites still see the user. The
+active-state indicator must say so.
 
 **Vault — honest limitations** (see `docs/vault-spec.md` §13 + `docs/known-issues.md`): the vault has
 **no recovery backstop** — lose both the master password and the Recovery Kit and it's unrecoverable by

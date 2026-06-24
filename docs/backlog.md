@@ -32,8 +32,38 @@
   written import-clean to move into a shared package later. The whole iOS target is unbuilt.
 - ☐ **Anti-adblock evasion (spec Phase 3).** Documented in `spec.md`, not built — bait-request
   stubbing + a maintained anti-adblock filter list. Pairs with the in-app inspector.
-- ☐ **Anti-fingerprinting (v2).** Canvas/timezone/client-hint surface spoofing. Original spec
-  scoped this to v2.
+- ☐ **Incognito mode (F9, v1 MVP — scope only, design before slicing).** surf-r is **already
+  ephemeral-by-default**, so incognito is *not* another ephemeral toggle: a session that additionally
+  leaves **no local trace** (no History / Downloads-history / favicon-cache writes, no bookmark-capture
+  prompts) and **suspends trust** (trusted domains stay `nonPersistent` — no login/SSO persistence;
+  Randomized-mode trusted exemption therefore does **not** apply in incognito), with a clear, honest
+  active-state indicator (still **not** anonymity — network/ISP/site still see the user). **Open
+  questions** (record, don't resolve): separate incognito **window** vs in-place toggle (*lean:*
+  window); visual indicator / rail treatment; vault behaviour (*lean:* fill allowed, save-**capture**
+  suppressed); default fingerprint mode (honour global; trust off → Randomized applies fully); zero-
+  trace verification (sentinel-grep / WAL discipline). Mirrors the **C3 earmark style** — scope, not a
+  slice plan. Full scope in `spec.md` §6. **MVP-critical.**
+- ☐ **Anti-fingerprinting (F10, v1 — designed, not built; promoted from v2).** Two user-selectable
+  modes. **Standard** (default, recommended) — present as **stock Safari on WebKit**, add **zero
+  entropy**, ephemeral state, engage WebKit's native AFP/ITP; blend into the Safari crowd. **Randomized**
+  (advanced, opt-in) — deterministic, **bucketed** "farbling" on the passive surfaces AFP doesn't cover
+  (canvas / WebGL / WebAudio readback + high-entropy navigator/screen clamps), injected document-start
+  in the **existing isolated `WKContentWorld`** (reuse the autofill seam), **seeded per (registrable
+  domain × visit session)** so close-and-return yields a new fingerprint; **trusted sites keep a single
+  stable fingerprint**. **Honest tradeoff:** Randomized can **increase** uniqueness / break sites → opt-
+  in, never a strict upgrade; Standard stays default. **Build tiers (measurement-first):** **FP-0**
+  fingerprint measurement harness (probe surf-r vs stock Safari on the same Tahoe build; resolves the
+  **UNVERIFIED** question of how much Safari-26 AFP a third-party `WKWebView` inherits — **build first**),
+  **FP-1** Standard-mode hardening (UA/`Accept-Language` entropy, add-nothing-observable), **FP-2**
+  Randomized mode (gated behind FP-0 numbers). MVP toggle = **global**; per-site override deferred (see
+  §C). Full design in `spec.md` §6.
+- ☐ **Anti-fingerprinting — per-site override (deferred from F10 v1).** Brave-style per-site shields /
+  per-site Standard-vs-Randomized choice. v1 ships a **global** toggle only; revisit post-v1.
+
+> **v1 finish line (sequencing).** Vault **Slice 9** (security check) → **Slice 10** (system AutoFill
+> extension) → then **Incognito + Anti-fingerprinting**, the last two v1 surfaces, each **design-pass-
+> then-slice**. They **interlock at the trust / Randomized boundary** (incognito suspends trust, which
+> drops the Randomized trusted-site exemption); their relative order within that final block is **open**.
 
 ## C. Deferred polish & fixes
 

@@ -36,8 +36,12 @@ fill + save** (isolated-world detection, exact-host anti-leak, ⌘\ / rail badge
 own save prompt). Built in `SurfrCore` (crypto/store/TOTP/generator) + the macOS app target. See
 `docs/spec.md` (reality-first; §6 maps phases to DONE/REMAINING) and `docs/backlog.md`.
 **Remaining major work:** vault Slice 9 (security check) + Slice 10 (system AutoFill extension,
-Apple-gated) → then v1 is essentially complete; IP routing (F1); CloudKit→**AirDrop-first** sync;
-`SurfrCore` extraction completion + iOS target; anti-adblock; anti-fingerprinting.
+Apple-gated) → then the **last two v1 surfaces**, both *design-pass-then-slice* and interlocking at the
+trust boundary: **Incognito mode** (F9 — a no-local-trace, trust-suspended session, distinct from the
+existing ephemeral-by-default) and **two-mode anti-fingerprinting** (F10 — Standard/blend-as-Safari by
+default, Randomized/farbled opt-in; promoted from v2 to v1) → then v1 is essentially complete.
+**Post-v1:** IP routing (F1); CloudKit→**AirDrop-first** sync; `SurfrCore` extraction completion + iOS
+target; anti-adblock.
 Still single-target macOS; data layers are written import-clean for the future `SurfrCore` move.
 
 ## Core architecture — the hybrid trust model
