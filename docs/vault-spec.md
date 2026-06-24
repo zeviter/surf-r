@@ -243,6 +243,17 @@ path — **no schema migration** needed when passkeys land.
 > Backfill/recompute walks items **one at a time** (decrypt → derive → zero plaintext → next), so only
 > one password is ever resident. Privacy cost disclosed in §13.
 
+> **Typed vault TV-1 — per-type payload shapes (no crypto/store change).** `items.type` now spans
+> `login · payment · address · secureNote` (+ reserved `passkey`). Each carries a **different decrypted
+> JSON shape** inside the **same** AES-256-GCM payload — exactly the property that lets passkeys drop in
+> for v2; there is **no schema/envelope migration**. `PaymentPayload` / `AddressPayload` /
+> `SecureNotePayload` + the pure `TypedNoteParser` (LastPass `NoteType:` classification + lossless field
+> extraction) live in `SurfrCore` (`TypedVault.swift`); `LoginPayload` stays in the app target until the
+> TV-3/Slice-10 extraction. A one-time, guarded walk re-classifies the Slice-9 `secureNote` items into
+> payment/address (one plaintext resident; idempotent). **Sensitive fields (card number, CVV, address
+> PII) stay encrypted-payload-only** — only `title`/`host` remain cleartext, so the §13 metadata-leak
+> disclosure does **not** grow. Audit + autofill stay **login-only**. See `docs/typed-vault-wireframes.md`.
+
 **Login payload (decrypted shape — cleartext only in memory, only while unlocked):**
 ```json
 { "username": "...", "password": "...", "notes": "...",

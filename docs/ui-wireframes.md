@@ -4,6 +4,9 @@
 > `CLAUDE.md` and `docs/spec.md`. This is the textual translation of the agreed wireframes — build
 > against the rules here, not against a rendered image. Where this conflicts with `spec.md`'s
 > feature table, this file wins for UI/layout/behaviour; `spec.md` wins for architecture.
+>
+> The WF numbering continues for the vault in `docs/vault-spec.md` (WF-1…WF-10) and for the **typed
+> vault** in `docs/typed-vault-wireframes.md` (**WF-11+** — Notes/Addresses/Payment).
 
 ---
 

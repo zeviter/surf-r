@@ -12,6 +12,8 @@ against current docs (WebKit, AuthenticationServices, CloudKit, Network) before 
 bookmarks/history UI work.
 **`docs/vault-spec.md`** is authoritative for the password vault + AutoFill (F5) — read it before any
 vault/credential/autofill work.
+**`docs/typed-vault-wireframes.md`** is authoritative for the typed vault (Notes/Addresses/Payment) UI
++ nav (WF-11+) — read before any typed-vault work.
 
 ## Environment
 - macOS Tahoe 26.5.1, Apple Silicon (MacBook Pro M1 Pro, 16 GB RAM).

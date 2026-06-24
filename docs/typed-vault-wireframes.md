@@ -331,9 +331,13 @@ detection**. TV-3 is the heavy, deferrable web-fill piece.
 |----|----|----|
 | **TV-1** | Data model + type classification + LastPass `NoteType` parsing (payment/address field extraction; everything else → note with raw body). Headless, unit-tested against the real export samples. Re-classify the `secureNote`-marked items from the Slice-9 closeout. | low–med |
 | **TV-2** | Segmented vault list (WF-12) + type picker (WF-13) + per-type detail/edit/copy (WF-15/16/17) + the uniform ESC/back nav model (WF-19). No web fill. **Most of the user-visible value.** | med |
-| **TV-3** | Click-to-fill for cards/addresses (WF-18): card/address web-form field detection in the isolated world + per-field overlay icon + multi-choice picker. Separable; deferrable without blocking TV-1/TV-2. | med–high |
+| **TV-3** | Click-to-fill for cards/addresses (WF-18): card/address web-form field detection in the isolated world + per-field overlay icon + multi-choice picker. **Pairs with Slice 10 as the autofill block** (shared `SurfrCore` extraction); deferrable without blocking TV-1/TV-2. | med–high |
 
 **Sequencing**
+- **TV-1 done** (data model + `NoteType` parsing + one-time re-classification; headless, unit-tested).
+  **TV-2 next** (segmented list + type picker + per-type detail/edit/copy + ESC/back nav) — with TV-1+TV-2
+  the **vault is fully built**. **TV-3 pairs with Slice 10 as the autofill block**, sharing the
+  `SurfrCore` extraction (`LoginPayload` / PSL / matcher relocation).
 - Lands **after Slice 9 commits**. Recommended before Slice 10 (it fixes real imported-data handling
   every LastPass user hits and is not Apple-gated), unless you'd rather finish the password story
   (Slice 10) first.

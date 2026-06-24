@@ -10,6 +10,8 @@ import GRDB
 public enum VaultItemType {
     public static let login = "login"
     public static let secureNote = "secureNote"   // non-login catch-all (host "sn"); not audited/filled
+    public static let payment = "payment"         // LastPass NoteType:Credit Card (typed vault TV-1)
+    public static let address = "address"         // LastPass NoteType:Address (typed vault TV-1)
     public static let passkey = "passkey"         // reserved (v2)
 }
 

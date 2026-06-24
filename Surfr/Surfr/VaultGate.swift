@@ -120,6 +120,7 @@ final class VaultGate: ObservableObject {
         audit = AuditSummary(); reusedItemIDs = []
         savedVaultQuery = ""; savedVaultOpenItemID = nil
         UserDefaults.standard.removeObject(forKey: Self.hostRecoveryAttemptedKey)
+        UserDefaults.standard.removeObject(forKey: Self.typedReclassifiedKey)   // re-migrate after a reset + reimport
         pendingMaster?.wipe(); pendingRecovery?.wipe()
         pendingMaster = nil; pendingRecovery = nil; pendingMeta = nil
         reducer = FirstRunReducer()
@@ -233,6 +234,7 @@ final class VaultGate: ObservableObject {
             recordMasterAuth()
             phase = .unlocked
             await loadItems()
+            await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
             return true
         } catch {
             lastError = "Incorrect master password."
@@ -257,6 +259,7 @@ final class VaultGate: ObservableObject {
             recordMasterAuth()
             phase = .unlocked
             await loadItems()
+            await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
             return true
         } catch {
             lastError = "Recovery code not recognized."
@@ -352,6 +355,27 @@ final class VaultGate: ObservableObject {
             var data = try VaultCrypto.decryptItem(item.sealed, vaultKey: key)
             defer { data.resetBytes(in: 0..<data.count) }   // zero the decrypted JSON immediately after use
             return try LoginPayload.decoded(from: data)
+        }
+    }
+
+    /// Decrypt a `payment`-typed item's structured payload (TV-1 storage shape). Same one-at-a-time,
+    /// zero-after-use discipline as `decryptPayload`. (TV-2 builds the detail/edit views on these.)
+    func decryptPayment(_ item: StoredItem) -> PaymentPayload? {
+        guard phase == .unlocked else { return nil }
+        return try? lock.withVaultKey { key in
+            var data = try VaultCrypto.decryptItem(item.sealed, vaultKey: key)
+            defer { data.resetBytes(in: 0..<data.count) }
+            return try PaymentPayload.decoded(from: data)
+        }
+    }
+
+    /// Decrypt an `address`-typed item's structured payload (TV-1 storage shape).
+    func decryptAddress(_ item: StoredItem) -> AddressPayload? {
+        guard phase == .unlocked else { return nil }
+        return try? lock.withVaultKey { key in
+            var data = try VaultCrypto.decryptItem(item.sealed, vaultKey: key)
+            defer { data.resetBytes(in: 0..<data.count) }
+            return try AddressPayload.decoded(from: data)
         }
     }
 
@@ -549,6 +573,87 @@ final class VaultGate: ObservableObject {
         return DerivedItemAudit(flags: flags, token: token, repairHosts: repair)
     }
 
+    // MARK: - Typed vault (TV-1) — re-classify imported secure notes into payment / address
+
+    private static let typedReclassifiedKey = "SurfrTypedVaultReclassifiedV1"
+
+    /// One-time, guarded migration of the **existing** Slice-9 `secureNote` items (runs once via a
+    /// UserDefaults marker, so a second launch doesn't re-migrate). New imports are handled by the
+    /// forced `reclassifyTypedItems()` call in the import path.
+    func reclassifyTypedItemsIfNeeded() async {
+        guard phase == .unlocked,
+              !UserDefaults.standard.bool(forKey: Self.typedReclassifiedKey) else { return }
+        await reclassifyTypedItems()
+        UserDefaults.standard.set(true, forKey: Self.typedReclassifiedKey)
+        #if DEBUG
+        dumpTypedItemsForReview()   // on-device DoD check (redacted; runs once after the migration)
+        #endif
+    }
+
+    #if DEBUG
+    /// DEBUG-only, **secret-redacted** verification dump (TV-1 DoD): prints each non-login item's type +
+    /// **field presence** so the migration can be confirmed on the real vault without any UI. Never logs
+    /// a full card number, CVV, note body, name, address, postcode, email, or phone value — only `set`/
+    /// `unset`, the card type, and the card's last-4 (already shown in the WF-17 list).
+    func dumpTypedItemsForReview() {
+        func s(_ v: String?) -> String { (v?.isEmpty == false) ? "set" : "unset" }
+        for item in items where !item.isLogin {
+            switch item.type {
+            case VaultItemType.payment:
+                let p = decryptPayment(item)
+                let last4 = p.map { String($0.number.filter(\.isNumber).suffix(4)) } ?? "?"
+                print("[TypedVault] payment ‘\(item.title)’ cardholder=\(s(p?.cardholderName)) type=\(p?.cardType ?? "?") number=••••\(last4) cvv=\(s(p?.cvv)) expiry=\(s(p?.expiry))")
+            case VaultItemType.address:
+                let a = decryptAddress(item)
+                print("[TypedVault] address ‘\(item.title)’ name=\(s(a?.firstName ?? a?.lastName)) line1=\(s(a?.line1)) city=\(s(a?.city)) county=\(s(a?.county)) state=\(s(a?.stateProvince)) postal=\(s(a?.postalCode)) phone=\(s(a?.phone)) email=\(s(a?.email))")
+            default:
+                print("[TypedVault] \(item.type) ‘\(item.title)’")
+            }
+        }
+    }
+    #endif
+
+    /// Walk `type == secureNote` items ONE AT A TIME — decrypt → parse the `NoteType` body → re-encrypt
+    /// cards/addresses as their typed payload (structured fields) and update `type`; a plain note is
+    /// left untouched (its body stays readable). One plaintext password/body resident at a time
+    /// (`decryptPayload` zeroes the JSON; the typed plaintext is zeroed after sealing). Idempotent —
+    /// already-typed items aren't `secureNote`, so a re-run skips them. Logins are never walked.
+    func reclassifyTypedItems() async {
+        guard let store, phase == .unlocked else { return }
+        var changed = false
+        for item in items where item.type == VaultItemType.secureNote {
+            guard let payload = decryptPayload(item) else { continue }   // LoginPayload; body = notes
+            switch TypedNoteParser.classify(title: item.title, body: payload.notes) {
+            case .payment(let p):
+                if await reencodeTyped(item, type: VaultItemType.payment, data: try? p.encoded()) { changed = true }
+            case .address(let a):
+                if await reencodeTyped(item, type: VaultItemType.address, data: try? a.encoded()) { changed = true }
+            case .secureNote:
+                break   // already the correct type; leave the body untouched
+            }
+        }
+        if changed {
+            items = (try? await store.allItems()) ?? items   // reflect new types (no recursion via loadItems)
+            vaultLog("typed-vault: re-classified imported notes into payment/address")
+        }
+    }
+
+    /// Re-encrypt an item's payload as a typed shape and update its `type`. The typed plaintext (which
+    /// includes a card number / CVV) is zeroed immediately after sealing. Returns whether it wrote.
+    @discardableResult
+    private func reencodeTyped(_ item: StoredItem, type: String, data: Data?) async -> Bool {
+        guard let store, phase == .unlocked, var data else { return false }
+        defer { data.resetBytes(in: 0..<data.count) }
+        do {
+            let sealed = try lock.withVaultKey { try VaultCrypto.encryptNewItem(data, vaultKey: $0) }
+            let updated = StoredItem(id: item.id, type: type, title: item.title,
+                                     createdAt: item.createdAt, modifiedAt: now(), sealed: sealed,
+                                     hosts: item.hosts, healthFlags: 0)
+            try await store.upsert(updated)
+            return true
+        } catch { return false }
+    }
+
     /// Recompute the published `AuditSummary` from current `items` flags + grouped reuse tokens. **No
     /// decryption** — both inputs are already-derived metadata. Cheap; runs on every `loadItems()`.
     private func refreshAuditSummary() async {
@@ -607,6 +712,7 @@ final class VaultGate: ObservableObject {
             }
             try await store.upsertMany(toStore)   // atomic — all or nothing
             await loadItems()
+            await reclassifyTypedItems()          // TV-1: refine freshly-imported notes → payment/address
             await runSecurityCheck()              // key + flag the freshly imported items (backfill)
             vaultLog("import: \(toStore.count) added, \(skippedDuplicates) exact-duplicate(s) skipped")
             return ImportSummary(imported: toStore.count, skippedDuplicates: skippedDuplicates, failed: false)
@@ -807,6 +913,7 @@ final class VaultGate: ObservableObject {
             lock.adopt(key)
             phase = .unlocked
             await loadItems()
+            await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
             vaultLog("biometric unlock succeeded")
             return true
         } catch BiometricFailure.userCancelled {
