@@ -30,13 +30,15 @@ The macOS app is well past MVP: rail with host-grouped tabs + flyout, summon-onl
 bookmarks-on-new-tab, full-page History/Trusted-Sites/Shortcuts/Downloads surfaces, ad/tracker/
 cookie-consent blocking, pop-up gate, HTTPS-only, tracking-param stripping, persistent download
 history, and the hybrid trust model. **The F5 password vault is largely built** (`docs/vault-spec.md`
-§11 Slices 1–8e): Argon2id/CryptoKit vault, master + Secure-Enclave biometric unlock, Recovery Kit,
-list/detail/add-edit, CSV import, generator, TOTP (+ Google Authenticator migration), and **in-browser
+§11 Slices 1–9): Argon2id/CryptoKit vault, master + Secure-Enclave biometric unlock, Recovery Kit,
+list/detail/add-edit, CSV import, generator, TOTP (+ Google Authenticator migration), **in-browser
 fill + save** (isolated-world detection, exact-host anti-leak, ⌘\ / rail badge / per-field overlay,
-own save prompt). Built in `SurfrCore` (crypto/store/TOTP/generator) + the macOS app target. See
-`docs/spec.md` (reality-first; §6 maps phases to DONE/REMAINING) and `docs/backlog.md`.
-**Remaining major work:** vault Slice 9 (security check) + Slice 10 (system AutoFill extension,
-Apple-gated) → then the **last two v1 surfaces**, both *design-pass-then-slice* and interlocking at the
+own save prompt), and the **Security Check** (weak/reused/2FA-available + junk-host hygiene via a
+keyed-token zero-decryption audit + bundled 2FA Directory snapshot). Built in `SurfrCore`
+(crypto/store/TOTP/generator/audit) + the macOS app target. See `docs/spec.md` (reality-first; §6 maps
+phases to DONE/REMAINING) and `docs/backlog.md`.
+**Remaining major work:** vault Slice 10 (system AutoFill extension, Apple-gated) → then the **last two
+v1 surfaces**, both *design-pass-then-slice* and interlocking at the
 trust boundary: **Incognito mode** (F9 — a no-local-trace, trust-suspended session, distinct from the
 existing ephemeral-by-default) and **two-mode anti-fingerprinting** (F10 — Standard/blend-as-Safari by
 default, Randomized/farbled opt-in; promoted from v2 to v1) → then v1 is essentially complete.

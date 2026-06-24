@@ -16,15 +16,23 @@
 - ☐ **IP obfuscation / routing (F1).** `WKWebsiteDataStore.proxyConfigurations` → self-hosted
   WireGuard or Tor (SOCKS5); plus **WebRTC leak hardening** and **DNS-over-HTTPS**. (UA
   normalisation partially done via the Safari UA fix.) Not started.
-- ◐ **Password manager — vault (F5).** ✓ **Built** (vault-spec §11 Slices 1–8e): Argon2id/CryptoKit
+- ◐ **Password manager — vault (F5).** ✓ **Built** (vault-spec §11 Slices 1–9): Argon2id/CryptoKit
   vault, master + Secure-Enclave biometric unlock, Recovery Kit, list/detail/add-edit, CSV import,
-  generator, TOTP (+ Google Authenticator migration), in-browser fill + save. **Remaining vault
-  slices: 9 (security check) + 10 (system AutoFill extension).**
-- ☐ **Password manager — security check (F5, vault Slice 9).** Local weak/reused/2FA-available
-  surface (WF-9); **fold in import data hygiene** (junk `item_hosts` like `sn`/empty-string registrable
-  domains from messy imports — clean up + a "needs attention" flag). See `known-issues.md`.
+  generator, TOTP (+ Google Authenticator migration), in-browser fill + save, **and Security Check**
+  (weak/reused/2FA-available + junk-host hygiene). **Remaining vault slice: 10 (system AutoFill
+  extension).**
 - ☐ **Password manager — system AutoFill extension (F5, vault Slice 10).** `ASCredentialProviderExtension`
   (+ passkeys) so credentials fill across all apps; relocate `LoginPayload` to `SurfrCore`. Apple-gated.
+- ☐ **Typed vault — Secure Notes / Addresses / Payment Methods (design-pass-then-slice).** Wireframe
+  spec pending; **scope only — do not design here.** LastPass exports these as secure notes (host `sn`);
+  Slice 9 already recognizes `host == "sn"` as non-login (`type = secureNote`), so they're **stored +
+  displayed but not type-specialized** — excluded from audit + autofill. This slice adds the typed
+  editors and parses the `NoteType:` body into structured fields (note/address/payment), refining the
+  `secureNote` catch-all. Its own slice with its own wireframe spec.
+- ☐ **2FA Directory snapshot goes stale (vault Slice 9 upkeep).** The bundled
+  `SurfrCore/.../twofa_totp_domains.json` (TOTP-supporting registrable domains, MIT, dated 2026-06-24)
+  has **no runtime refresh by design** — re-snapshot from the 2fa.directory v4 API and re-bundle on a
+  periodic cadence (a new build ships the new file). Low priority; the date is shown in the UI.
 - ☐ **Cross-device sync (F5/F6/F8) — AirDrop-first.** v1 is local-only (no server, no CloudKit);
   cross-device arrives as an **encrypted AirDrop export** to the iOS app (items already per-item AEAD,
   so it drops in without a rewrite). A CloudKit E2E private-DB sync is a possible later option, not v1.
@@ -130,12 +138,26 @@
 
 ## Recently completed (short-term context; pruned over time)
 
+- ✓ **F5 vault — Slice 9 (Security Check + junk-host hygiene).** WF-9 sub-surface (Weak / Reused /
+  2FA-available / Needs-attention), built on a **keyed-token, zero-decryption audit**: `health_flags`
+  bitfield + an `audit_cache` of `HMAC-SHA256(audit_key, password)` reuse tokens (`audit_key =
+  HKDF(vaultKey, "surfr-audit-v1")`), grouped on read so only password **equality** ever leaves the
+  ciphertext — never the password, never a bare hash. Weak = the generator's entropy math (no zxcvbn);
+  2FA-available = the registrable domain is in a **bundled 2FA Directory TOTP snapshot** (MIT,
+  attributed, no runtime network). One-at-a-time backfill (one plaintext resident). **Type-correctness:**
+  audit + autofill are **login-only** — LastPass Secure Notes / Cards / Addresses (host `sn`) are
+  recognized as non-login (`type = secureNote`), excluded, and displayed as-is (so a card number is
+  never scanned as a password); genuine **hostless logins** stay on the URL-derivable auto-fix / "needs
+  attention" path. Reused renders as **clusters** ("N logins share a password"; value never shown).
+  Vault nav is a **stack** (Back/ESC pop one level; item-from-Security-Check returns to it; ESC clears
+  search first). Pure `AuditEngine` + `VaultNav` in the app + `SecurityCheckView`; WF-4 list badges
+  render from cached flags/tokens with no decryption. Hardware-verified by zeviter (real migrated vault).
 - ✓ **F5 password vault — Slices 1–8e** (`docs/vault-spec.md` §11). Argon2id/CryptoKit envelope crypto
   (`SurfrCore`), GRDB store + lock state machine, master-password unlock + mandatory Recovery Kit,
   Secure-Enclave biometric unlock, list/detail/add-edit, CSV import (LastPass/Bitwarden/Chrome/Safari),
   password+passphrase generator (bundled EFF list), TOTP + native Google Authenticator migration, and
   in-browser fill + save (8a detect/host-match/fill, 8c two-step, 8b save prompt, 8d rail badge, 8e
-  per-field native overlay). Remaining: Slice 9 + 10.
+  per-field native overlay). Remaining: Slice 10.
 
 - ✓ **Privacy Stage-1 (three wins).** (1) HTTPS-only by default — main-frame http upgraded to
   https; failure shows an interstitial with explicit per-site "continue insecurely" (no silent

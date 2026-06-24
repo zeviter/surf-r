@@ -22,6 +22,19 @@ final class AutofillMatcherTests: XCTestCase {
         XCTAssertTrue(offers("https", "example.com", "example.com"))
     }
 
+    /// Non-login items (imported secure notes / cards / addresses) are never offered, even on an exact
+    /// host match — autofill is login-only (Slice 9 type-correctness).
+    func test_nonLoginItem_neverOffered_evenOnExactHostMatch() {
+        let note = StoredItem(type: VaultItemType.secureNote, title: "Card",
+                              createdAt: Date(timeIntervalSince1970: 0), modifiedAt: Date(timeIntervalSince1970: 0),
+                              sealed: SealedItem(wrappedItemKey: Data(), ciphertext: Data()),
+                              hosts: [SurfrCore.Host(host: "example.com", isPrimary: true)])
+        XCTAssertTrue(AutofillMatcher.matches(scheme: "https", host: "example.com", items: [note]).isEmpty)
+        // A real login on the same host still offers (regression guard).
+        XCTAssertFalse(AutofillMatcher.matches(scheme: "https", host: "example.com",
+                                               items: [item("Login", ["example.com"])]).isEmpty)
+    }
+
     func test_subdomain_accepted_bothDirections() {
         XCTAssertTrue(offers("https", "login.example.com", "example.com"))   // page subdomain
         XCTAssertTrue(offers("https", "example.com", "accounts.example.com")) // cred subdomain

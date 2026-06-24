@@ -117,6 +117,7 @@ final class VaultGate: ObservableObject {
         biometricInvalidated = false
         try? await store?.wipeAll()
         items = []
+        audit = AuditSummary(); reusedItemIDs = []
         savedVaultQuery = ""; savedVaultOpenItemID = nil
         UserDefaults.standard.removeObject(forKey: Self.hostRecoveryAttemptedKey)
         pendingMaster?.wipe(); pendingRecovery?.wipe()
@@ -266,6 +267,7 @@ final class VaultGate: ObservableObject {
     func lockNow() {
         lock.lock()
         items = []
+        audit = AuditSummary(); reusedItemIDs = []          // derived signals are session state
         savedVaultQuery = ""; savedVaultOpenItemID = nil   // reset UI state at the security boundary
         if phase == .unlocked { phase = .locked }
     }
@@ -289,6 +291,16 @@ final class VaultGate: ObservableObject {
         guard let store, phase == .unlocked else { items = []; return }
         var loaded = (try? await store.allItems()) ?? []
         var changed = false
+
+        // Step 0 — every load, NO decryption: classify LastPass secure-note exports (host "sn") as
+        // non-login. Cards/notes/addresses all carry host "sn"; they're stored + displayed as-is but
+        // must not be audited or autofilled. Clear any stale audit state on first sight (idempotent —
+        // once reclassified, `isLogin` is false so this skips). Empty-string-host LOGINs are untouched.
+        for item in loaded where item.isLogin && item.hosts.contains(where: { AuditEngine.isNonLoginHostMarker($0.host) }) {
+            try? await store.setType(VaultItemType.secureNote, forItemID: item.id)
+            try? await store.setHealth(flags: 0, reuseToken: nil, forItemID: item.id, computedAt: now())
+            changed = true
+        }
 
         // Step 1 — every load, NO decryption: reduce existing item_hosts to the registrable domain
         // (heals www./full-URL/subdomain+path forms). Idempotent: once bare, re-running is a no-op.
@@ -316,6 +328,7 @@ final class VaultGate: ObservableObject {
 
         if changed { loaded = (try? await store.allItems()) ?? loaded }
         items = loaded
+        await refreshAuditSummary()   // zero-decryption: badges/summary from stored flags + grouped tokens
     }
 
     /// Reduce each host to its registrable domain (from host-or-URL) and de-duplicate, preserving the
@@ -408,6 +421,7 @@ final class VaultGate: ObservableObject {
                 healthFlags: existing?.healthFlags ?? 0
             )
             try await store.upsert(item)
+            await updateAudit(for: item)   // steady-state: re-key this item's flags + reuse token
             await loadItems()
         } catch {
             lastError = "Could not save the item."
@@ -418,6 +432,148 @@ final class VaultGate: ObservableObject {
         guard let store else { return }
         try? await store.deleteItem(id: id)
         await loadItems()
+    }
+
+    // MARK: - Security check (Slice 9 / WF-9) — keyed-token, zero-decryption audit + junk-host hygiene
+
+    /// The audit summary the Security Check surface + WF-4 badges read. Derived from `items.healthFlags`
+    /// (zero decryption) plus reuse-token grouping (zero decryption). Rebuilt by `runSecurityCheck()`;
+    /// the cheap re-derivation also runs on every `loadItems()` so badges stay live.
+    struct AuditSummary: Equatable {
+        var weak: [UUID] = []
+        var reused: [UUID] = []
+        /// Reused, grouped by shared password — each cluster is the set of items sharing one password
+        /// (≥2 members). Drives the clustered "N logins share a password" UI. The shared value is never
+        /// included; only the member IDs.
+        var reuseClusters: [[UUID]] = []
+        var twoFAAvailable: [UUID] = []
+        var junk: [UUID] = []
+        var reuseGroupSize: [UUID: Int] = [:]
+        var lastChecked: Date?
+        var isEmpty: Bool { weak.isEmpty && reused.isEmpty && twoFAAvailable.isEmpty && junk.isEmpty }
+    }
+
+    @Published private(set) var audit = AuditSummary()
+    /// Reuse set for the list badge (zero-decryption: grouped keyed tokens). Mirrors `audit.reused`.
+    private(set) var reusedItemIDs: Set<UUID> = []
+
+    /// The bundled 2FA Directory snapshot date + attribution, surfaced honestly in the UI.
+    var twoFASnapshotDate: String { TwoFADirectory.snapshotDate }
+    var twoFAAttribution: String { TwoFADirectory.attribution }
+
+    /// Full recompute (also the one-time **backfill** for an already-migrated vault). Walks items ONE
+    /// AT A TIME — decrypt → derive isWeak + reuse_token + 2FA/junk flags → the plaintext is zeroed
+    /// before the next item (`decryptPayload`'s `defer resetBytes`), so only one password is ever
+    /// resident. Idempotent. Cheap for a personal vault, so it runs on every Security-Check open.
+    func runSecurityCheck() async {
+        guard let store, phase == .unlocked else { return }
+        isWorking = true; defer { isWorking = false }
+        guard let auditKey = try? lock.withVaultKey({ VaultCrypto.deriveAuditKey(vaultKey: $0) }) else { return }
+
+        // Rotation invariant (vault-spec §6): the vault key is never regenerated, so the audit key is
+        // stable. If the persisted self-check ever disagrees, the old tokens are meaningless — clear
+        // and rebuild rather than group stale tokens.
+        let keyCheck = VaultCrypto.auditKeyCheck(auditKey: auditKey)
+        if let meta = try? await store.loadAuditMeta(), meta.keyCheck != keyCheck {
+            try? await store.clearAuditTokens()
+            vaultLog("audit key-check mismatch → cleared stale reuse tokens (rebuilding)")
+        }
+
+        let stamp = now()
+        var repairedAny = false
+        for item in items where item.isLogin {     // non-login items (secure notes) are never audited
+            guard let derived = deriveAudit(for: item, auditKey: auditKey) else { continue }
+            if let repair = derived.repairHosts {
+                try? await store.updateHosts(repair, forItemID: item.id)
+                repairedAny = true
+                vaultLog("junk-host auto-fixed from payload URL")
+            }
+            try? await store.setHealth(flags: derived.flags.rawValue, reuseToken: derived.token,
+                                       forItemID: item.id, computedAt: stamp)
+        }
+        try? await store.saveAuditMeta(keyCheck: keyCheck, checkedAt: stamp)
+        _ = repairedAny
+        await loadItems()             // pick up repaired hosts + fresh health_flags; refreshes the summary
+    }
+
+    /// Re-key ONE item's audit (steady-state): called after a save/edit so flags + reuse token stay
+    /// current without a full walk. Reused is still derived on read, so only this item's token changes.
+    private func updateAudit(for item: StoredItem) async {
+        guard let store, phase == .unlocked,
+              let auditKey = try? lock.withVaultKey({ VaultCrypto.deriveAuditKey(vaultKey: $0) }),
+              let derived = deriveAudit(for: item, auditKey: auditKey) else { return }
+        if let repair = derived.repairHosts { try? await store.updateHosts(repair, forItemID: item.id) }
+        try? await store.setHealth(flags: derived.flags.rawValue, reuseToken: derived.token,
+                                   forItemID: item.id, computedAt: now())
+    }
+
+    /// The non-secret outcome of decrypting one item for audit. The password never escapes
+    /// `deriveAudit`; only the bitfield + the **keyed** reuse token (equality-only) come back.
+    private struct DerivedItemAudit { var flags: HealthFlags; var token: Data?; var repairHosts: [SurfrCore.Host]? }
+
+    /// Decrypt one item (one plaintext resident) and compute its audit signals. `decryptPayload` zeroes
+    /// the decrypted JSON immediately; the transient password `String` is dropped when this returns.
+    private func deriveAudit(for item: StoredItem, auditKey: SymmetricKey) -> DerivedItemAudit? {
+        guard let payload = decryptPayload(item) else { return nil }
+        let password = payload.password
+        let hasPassword = !password.isEmpty
+        let hasTOTP = !(payload.totp ?? "").isEmpty
+
+        let resolved = item.hosts.map { TrustStore.registrableDomain(forHostOrURL: $0.host) }
+        let rawHostsNonEmpty = item.hosts.contains { !$0.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        // Junk-host: auto-fix ONLY the unambiguous case (a payload URL that parses to a valid registrable
+        // domain). NEVER guess from a malformed host token like "sn" — that stays surfaced for manual fix.
+        var junk = AuditEngine.isJunkHost(resolvedDomains: resolved, rawHostsNonEmpty: rawHostsNonEmpty, hasPassword: hasPassword)
+        var repair: [SurfrCore.Host]?
+        if junk {
+            let fromURL = Self.normalizedHosts(payload.urls.map { SurfrCore.Host(host: $0, isPrimary: true) })
+                .filter { AuditEngine.isLikelyRegistrableDomain($0.host) }
+            if !fromURL.isEmpty { repair = fromURL; junk = false }
+        }
+
+        let validDomains = resolved.filter { AuditEngine.isLikelyRegistrableDomain($0) }
+            + (repair?.map(\.host) ?? [])
+
+        var flags: HealthFlags = []
+        if AuditEngine.isWeak(password: password) { flags.insert(.weak) }
+        if hasTOTP { flags.insert(.hasTOTP) }
+        if AuditEngine.is2FAAvailable(registrableDomains: validDomains, hasTOTP: hasTOTP, totpDomains: TwoFADirectory.domains) {
+            flags.insert(.twoFAAvailable)
+        }
+        if junk { flags.insert(.junkHost) }
+
+        let token = hasPassword
+            ? VaultCrypto.auditReuseToken(normalizedPassword: AuditEngine.normalizedPasswordData(password), auditKey: auditKey)
+            : nil
+        return DerivedItemAudit(flags: flags, token: token, repairHosts: repair)
+    }
+
+    /// Recompute the published `AuditSummary` from current `items` flags + grouped reuse tokens. **No
+    /// decryption** — both inputs are already-derived metadata. Cheap; runs on every `loadItems()`.
+    private func refreshAuditSummary() async {
+        guard let store, phase == .unlocked else {
+            if !audit.isEmpty || !reusedItemIDs.isEmpty { audit = AuditSummary(); reusedItemIDs = [] }
+            return
+        }
+        // Tokens only exist for login items (non-login items have theirs cleared on reclassification),
+        // so grouping is already login-only; guard the flag reads on isLogin too (defence in depth).
+        let tokens = (try? await store.auditTokens()) ?? [:]
+        let reusedSet = AuditEngine.reusedItemIDs(tokensByItem: tokens)
+        let sizes = AuditEngine.reuseGroupSizes(tokensByItem: tokens)
+        var s = AuditSummary()
+        for item in items where item.isLogin {
+            let f = HealthFlags(rawValue: item.healthFlags)
+            if f.contains(.weak) { s.weak.append(item.id) }
+            if f.contains(.twoFAAvailable) { s.twoFAAvailable.append(item.id) }
+            if f.contains(.junkHost) { s.junk.append(item.id) }
+            if reusedSet.contains(item.id) { s.reused.append(item.id) }
+        }
+        s.reuseGroupSize = sizes
+        s.reuseClusters = AuditEngine.reuseClusters(tokensByItem: tokens) { $0.uuidString < $1.uuidString }
+        s.lastChecked = (try? await store.loadAuditMeta())?.checkedAt
+        reusedItemIDs = reusedSet
+        audit = s
     }
 
     /// Bulk CSV import (Slice 5b): skip EXACT duplicates (every field incl. password — a same
@@ -451,6 +607,7 @@ final class VaultGate: ObservableObject {
             }
             try await store.upsertMany(toStore)   // atomic — all or nothing
             await loadItems()
+            await runSecurityCheck()              // key + flag the freshly imported items (backfill)
             vaultLog("import: \(toStore.count) added, \(skippedDuplicates) exact-duplicate(s) skipped")
             return ImportSummary(imported: toStore.count, skippedDuplicates: skippedDuplicates, failed: false)
         } catch {
@@ -515,6 +672,7 @@ final class VaultGate: ObservableObject {
             }
             try await store.upsertMany(toStore)
             await loadItems()
+            await runSecurityCheck()              // re-key audit: attached TOTP clears 2FA-available
             return ImportSummary(imported: toStore.count, skippedDuplicates: 0, failed: false)
         } catch {
             lastError = "Couldn’t import the one-time codes — nothing was changed."

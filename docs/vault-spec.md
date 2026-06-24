@@ -227,6 +227,22 @@ path — **no schema migration** needed when passkeys land.
 > credential's payload is ever in cleartext in memory, briefly. This is the deliberate upside of the
 > cleartext-metadata tradeoff in §13: minimal plaintext exposure, and the list/search stay fast.
 
+> **Slice 9 — keyed audit cache (Security Check; zero-decryption steady state).** `items.health_flags`
+> is now a populated **bitfield** of per-item intrinsic signals — `weak`, `2FA-available`, `has-TOTP`,
+> `junk-host` (`HealthFlags` in `SurfrCore/AuditEngine.swift`) — computed when the plaintext is in hand
+> (save / edit / import / one-time backfill) and thereafter read with **no decryption** by both the
+> Security Check surface and the WF-4 list badges. The `audit_cache` table is reshaped from the unused
+> `(item_id, signal)` sketch to **`item_id → reuse_token`**: `reuse_token = HMAC-SHA256(audit_key,
+> NFC(password))` where `audit_key = HKDF-SHA256(vaultKey, "surfr-audit-v1")`. The token reveals only
+> **equality** between passwords (reuse is grouped on read; an item is reused iff its token appears on
+> ≥2 items), never the password, and is not offline-guessable without `audit_key` (in memory only while
+> unlocked) — **never a bare/unsalted hash**. A new singleton **`audit_meta`** row holds the audit-key
+> self-check (`HMAC(audit_key, sentinel)`) + last-check time: because the vault key is **re-wrapped,
+> never regenerated**, on a master-password change, `audit_key` is stable; if the self-check ever
+> disagreed the cache would be cleared and rebuilt (the rotation invariant, enforced structurally).
+> Backfill/recompute walks items **one at a time** (decrypt → derive → zero plaintext → next), so only
+> one password is ever resident. Privacy cost disclosed in §13.
+
 **Login payload (decrypted shape — cleartext only in memory, only while unlocked):**
 ```json
 { "username": "...", "password": "...", "notes": "...",
@@ -273,6 +289,9 @@ Two distinct fill paths, sharing the vault but driven differently.
   not in page DOM) — all routing through one shared **on-demand detect-at-press** + fill path.
 - Fill is **biometric-gated, with a master-password fallback** (never a dead end); fills via
   `callAsyncJavaScript` in the isolated world (password passed as an argument, never the clipboard).
+- **Login-only.** Matching/fill consider `type == login` items only — imported secure notes / cards /
+  addresses (host `sn`, `type = secureNote`; §10 Slice 9) are never offered. Same login-only rule
+  applies to the Security Check audit.
 - **Save/update** is surf-r's **own** prompt (WKWebView's system "save" rarely fires), driven by a
   **tight gesture-based capture** — a real submit gesture of a form with exactly one visible password +
   adjacent username (multi-password change/signup excluded); options **Save / Not now / Never**.
@@ -531,6 +550,32 @@ Visual versions are in the PDF; these are the implementation notes.
   Quiet, dismissible, with a per-site "never".
 - **WF-9 · Security check ("Watchtower"-style).** `PageScaffold` list grouped Weak / Reused / 2FA-available,
   amber/blue vocabulary. **Local-only** checks; breach (HIBP) lookups deferred (need a network call).
+  > **Slice 9 as-built.** A **sub-surface** of the vault (not a rail icon), reached from a shield icon in
+  > the vault-list header (`SecurityCheckView.swift`); requires unlock. Four groups — **Weak · Reused ·
+  > 2FA-available · Needs attention** (junk hosts) — each row reuses the host favicon tile and links to
+  > the item editor (regenerate password / give each its own / add a one-time code / fix website). Empty
+  > groups show "all clear", not hidden. Recompute-on-open (also the one-time backfill) + "Last checked"
+  > + manual **Re-run**. The three signals are pure functions in `SurfrCore` (`AuditEngine`): **weak** =
+  > the generator's entropy math (`length × log2(observed pool)`; weak iff `< 50` bits **or** `< 8`
+  > chars; no zxcvbn), **reused** = grouped keyed tokens, **2FA-available** = the item's registrable
+  > domain is in the bundled **2FA Directory** TOTP snapshot **and** the item has no stored code. Honesty
+  > copy is shown: 2FA-availability is "based on a bundled list (dated `YYYY-MM-DD`) — absence isn't proof
+  > a site lacks 2FA", with the required attribution **"Data sourced from 2FA Directory by 2factorauth"**
+  > (snapshot is a SwiftPM resource, MIT, `SurfrCore/TWOFA_DIRECTORY_LICENSE.md`; loader fails loud if
+  > missing/empty; **no runtime network — refresh = a new build**). **Junk-host hygiene** folds into the
+  > same walk: an empty/unresolvable host (e.g. `sn`) is flagged "needs attention"; the unambiguous case
+  > (a payload URL that parses to a real registrable domain) is **auto-fixed**, never guessed from the
+  > malformed token. No HIBP / breach lookup, no auto-rotation (findings are advisory + link to a manual
+  > fix). Per-item override / per-site config out of scope.
+  > **Type-correctness:** the audit (and autofill, §7) operate on **`type == login` only**. LastPass
+  > exports Secure Notes / Cards / Addresses as secure notes with host `sn`; `loadItems` recognizes
+  > `host == "sn"` (cleartext metadata, no decryption) and reclassifies them `type = secureNote`,
+  > clearing any stale `health_flags`/token, so a card number is never scanned as a password and a note
+  > is never offered for fill. They stay in the vault, displayed as-is (typed editors are a later slice).
+  > The Reused group renders as **clusters** (one block per shared password, header "N logins share a
+  > password") — the actionable unit; the shared value is **never** shown. Vault nav is a **stack**:
+  > Back/ESC pop one level (edit → detail → list → close surface), an item opened from the Security Check
+  > returns to it, and ESC clears an active search before popping (`VaultNav`).
 - **WF-10 · Recovery Kit.** The printable artifact from first run: grouped high-entropy code, a place to
   note the master password, blunt instructions ("no backstop", "anyone with this code + your device can
   open the vault").
@@ -546,7 +591,8 @@ invisible risk visible without nagging.
 Vertical, each buildable/testable on the Mac before the next; crypto + storage land first as headless,
 unit-tested cores; UI follows; the Apple-gated extension lands last in v1.
 
-Status through 2026-06: **Slices 1–8 done** (8 expanded into 8a–8e — see below); **9–10 remain**.
+Status through 2026-06: **Slices 1–9 done** (8 expanded into 8a–8e — see below); **only Slice 10
+(system AutoFill extension, Apple-gated) remains** for v1.
 
 | # | Slice | Status | Ships · verified by | Effort |
 |----|----|----|----|----|
@@ -563,7 +609,7 @@ Status through 2026-06: **Slices 1–8 done** (8 expanded into 8a–8e — see b
 | 8b | Save / update prompt | ✅ done | surf-r's own save bar (WF-8); gesture-based capture (tight: single visible password + adjacent username; multi-password excluded); Save / Not now / Never. | med |
 | 8d | Rail availability badge | ✅ done | Host-level "saved login available" key on the rail tile (native chrome), all tab states. | low |
 | 8e | Per-field native-overlay icon | ✅ done | Key icon adjacent to each field (native overlay, not page DOM); amber=available / green=surf-r-filled; master-password fill fallback. | med |
-| 9 | Security check | ☐ remaining | Local weak/reused/2FA-available surface (WF-9); junk-host import hygiene. | low |
+| 9 | **Security check** | ✅ done | Local weak/reused/2FA-available surface (WF-9) + junk-host hygiene, via a **keyed-token zero-decryption audit** (`audit_cache` reuse tokens + `health_flags`) and a bundled **2FA Directory** TOTP snapshot (MIT). `AuditEngine` (pure, `SurfrCore`) + `SecurityCheckView`. | low |
 | 10 | System AutoFill extension | ☐ remaining | `ASCredentialProviderExtension` + identity-store index + biometric gate; relocate `LoginPayload` to `SurfrCore`. Needs Apple-Dev enrolment + entitlements (§12). | high |
 
 **v1.5** — Encrypted AirDrop export/import to the iOS app; **two-step new-login save-capture** (stateful
@@ -612,7 +658,8 @@ getting the key hierarchy right unblocks everything else.
 | Casual snooping (auto-lock; biometric reveal/copy gating). | A coerced master password or a stolen Recovery Kit — the kit is a real second door. |
 | Cloud-leak exposure (nothing uploaded; no server to breach). | Two-factor independence when TOTP shares the vault — disclosed and optional. |
 | Vendor lock-in / telemetry (self-owned; collects nothing). | Total loss if **both** master password and Recovery Kit are lost — unrecoverable by design. |
-| Exposure of credential *contents* at rest (usernames/passwords/notes/TOTP are AES-256-GCM encrypted; only ciphertext is on disk). | **Metadata leak from the raw DB file.** Item titles and associated hosts are stored as cleartext metadata (§6), so an attacker with the database file but **not** the vault key can still learn *which sites you have entries for* — just not the credentials themselves. |
+| Exposure of credential *contents* at rest (usernames/passwords/notes/TOTP are AES-256-GCM encrypted; only ciphertext is on disk). | **Metadata leak from the raw DB file.** Item titles and associated hosts are stored as cleartext metadata (§6), so an attacker with the database file but **not** the vault key can still learn *which sites you have entries for* — just not the credentials themselves. Imported **non-login** items (secure notes / cards / addresses) keep the same shape — their bodies (card numbers, note text) live in the **encrypted payload**; only `title`/`host` are cleartext. Recognizing them as non-login (host `sn` → `type = secureNote`, §6/§10) changes only a cleartext `type` flag, adding **no new at-rest exposure**. |
+| Exposure of *password values* via the audit cache (the Security Check stores no password and no recoverable hash — only a keyed HMAC token, §6). | **Coarse health metadata from the raw DB file (Slice 9).** `items.health_flags` (weak / 2FA-available / has-TOTP / junk-host) and the `audit_cache` reuse tokens are cleartext-**derived** metadata. An attacker with the DB but **not** the vault key learns coarse health signals — *which entries are weak, and which share a password* (by opaque, equality-only keyed token) — but **not** the passwords, and the token is not offline-guessable without the in-memory `audit_key`. Extends the title/host metadata-leak disclosure above. |
 
 State these honestly in any user-facing copy, consistent with `spec.md` §9.
 

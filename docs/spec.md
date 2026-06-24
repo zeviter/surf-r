@@ -39,7 +39,7 @@ Status: ✓ done · ◐ partial · ☐ not started.
 | F7 | Organised history | ✓ | GRDB `HistoryStore` (indexed, substring search, date-grouped, 365-day auto-prune, local-only); full-page history surface. (`HistoryStore.swift`, `HistoryView.swift`.) |
 | F8 | Omnibox shortcut | ✓ | `⌘L` summons the spotlight overlay (or focuses the permanent new-tab box); URL-vs-DuckDuckGo parser; `Enter` = current tab, `⌘Enter` = new tab. (`Spotlight.swift`, `Omnibox.swift`.) |
 | F1 | IP obfuscation / routing | ☐ | Planned: per-app `WKWebsiteDataStore.proxyConfigurations` → SOCKS5 (Tor / self-hosted WireGuard) + WebRTC/DNS leak hardening. Not started. |
-| F5 | Password manager (vault + system autofill) | ◑ | **Largely built** (see `docs/vault-spec.md` §11): CryptoKit/Argon2id vault, master + Secure-Enclave biometric unlock, Recovery Kit, list/detail/add-edit, CSV import, generator, TOTP (+ Google Authenticator migration), and **in-browser fill + save** (Slices 1–8e). **Remaining:** Slice 9 (security check) and Slice 10 system AutoFill extension (`ASCredentialProviderExtension`, Apple-gated); passkeys are v2. |
+| F5 | Password manager (vault + system autofill) | ◑ | **Largely built** (see `docs/vault-spec.md` §11): CryptoKit/Argon2id vault, master + Secure-Enclave biometric unlock, Recovery Kit, list/detail/add-edit, CSV import, generator, TOTP (+ Google Authenticator migration), **in-browser fill + save** (Slices 1–8e), and the **Security Check** — local weak/reused/2FA-available + junk-host hygiene via a keyed-token zero-decryption audit (Slice 9). **Remaining:** only Slice 10 system AutoFill extension (`ASCredentialProviderExtension`, Apple-gated); passkeys are v2. |
 | F9 | Incognito mode (no-local-trace session, trust suspended) | ☐ | **MVP/v1 — scope only, design before slicing.** surf-r is already ephemeral-by-default for web state, so incognito is *not* another ephemeral toggle: it additionally leaves **no local trace** (no History / Downloads-history / favicon-cache writes, no bookmark-capture prompts) and **suspends trust** (trusted domains stay `nonPersistent` — no login/SSO persistence), with a clear, honest active-state indicator. Last-v1 surface alongside anti-fingerprinting (§6). |
 | F10 | Anti-fingerprinting (two modes: Standard / Randomized) | ☐ | **v1 — designed, not built; lands after vault Slice 10.** Baseline = present as **stock Safari on WebKit** (large crowd) + ephemeral-by-default + engage WebKit's native AFP/ITP. **Standard** (default) adds zero entropy; **Randomized** (opt-in) injects deterministic, bucketed farbling on canvas/WebGL/WebAudio + high-entropy clamps in the existing isolated `WKContentWorld`, seeded per (registrable domain × visit session), with a trusted-site stable-fingerprint exemption. Honest tradeoff: Randomized can *increase* uniqueness. Full design + build tiers (FP-0/1/2) in §6. |
 
@@ -201,6 +201,9 @@ page, drag-reorderable rail.
 ### Phase 8 — Autofill (F5) — ◑ in-browser done; system extension remaining
 - **In-browser fill + save done** (vault-spec Slices 8a–8e): isolated-world detection, exact-host
   anti-leak, ⌘\ / rail badge / per-field native-overlay icon, biometric+master fill, own save prompt.
+- **Security Check done** (vault-spec Slice 9 / WF-9): local weak/reused/2FA-available surface + junk-host
+  hygiene, via a keyed-token (HMAC over an HKDF audit key) **zero-decryption** audit cache + a bundled
+  **2FA Directory** TOTP snapshot (MIT, no runtime network). Pure `AuditEngine` in `SurfrCore`.
 - **Remaining (Slice 10):** `ASCredentialProviderExtension` targets (iOS + macOS); QuickType + full UI;
   passkeys (`ASPasskeyCredential`, iOS 17+). Fills detected login fields/QuickType/Safari, **not** the
   generic context-menu on arbitrary text fields (Apple-private) — as with all third-party managers.
@@ -356,8 +359,11 @@ active-state indicator must say so.
 design. **TOTP shares the vault**, so a single unlock exposes both factors (optional, disclosed). The
 in-browser autofill **never injects into page DOM** and offers credentials only on an exact
 registrable-host match with a real visible login form, but has documented gaps (dynamic shadow-DOM
-hide-on-close popups, cross-origin iframes, closed shadow roots). State these honestly in user-facing
-privacy copy.
+hide-on-close popups, cross-origin iframes, closed shadow roots). The **Security Check** (Slice 9)
+stores no password and no recoverable hash — only `health_flags` + a **keyed HMAC reuse token** — so a
+raw-DB attacker without the vault key learns coarse health signals (which entries are weak, which share
+a password by opaque token) but not the passwords (extends the cleartext-metadata disclosure;
+`vault-spec.md` §13). State these honestly in user-facing privacy copy.
 
 ## 10. Human-only steps
 Apple Developer enrolment, signing identities/certs, first-time capability prompts (CloudKit,

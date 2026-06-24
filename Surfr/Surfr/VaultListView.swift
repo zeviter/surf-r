@@ -41,9 +41,9 @@ struct VaultSurface: View {
 struct VaultListView: View {
     @EnvironmentObject private var gate: VaultGate
 
-    private enum Mode: Equatable { case list, detail(UUID), edit(UUID?) }
-    @State private var mode: Mode = .list
+    @State private var nav = VaultNav()
     @State private var query = ""
+    @State private var scQuery = ""           // Security Check search (lifted so ESC can clear it first)
     @State private var regeneratedCode: String?
     @State private var searchFocusToken = 0
     @StateObject private var importer = ImportCoordinator()
@@ -57,25 +57,23 @@ struct VaultListView: View {
             .onAppear {
                 query = gate.savedVaultQuery
                 if let id = gate.savedVaultOpenItemID, gate.items.contains(where: { $0.id == id }) {
-                    mode = .detail(id); restoredItem = true
+                    nav = VaultNav(); nav.push(.detail(id)); restoredItem = true
                 }
             }
             .onChange(of: gate.items) { _, items in   // open item may only be available after async load
-                guard !restoredItem, mode == .list, let id = gate.savedVaultOpenItemID,
+                guard !restoredItem, nav.atRoot, let id = gate.savedVaultOpenItemID,
                       items.contains(where: { $0.id == id }) else { return }
-                restoredItem = true; mode = .detail(id)
+                restoredItem = true; nav.push(.detail(id))
             }
             .onChange(of: query) { _, q in gate.savedVaultQuery = q }
-            .onChange(of: mode) { _, m in
-                switch m {
-                case .detail(let id): gate.savedVaultOpenItemID = id
-                case .edit(let id): gate.savedVaultOpenItemID = id
-                case .list: gate.savedVaultOpenItemID = nil
-                }
-            }
+            .onChange(of: nav) { _, n in gate.savedVaultOpenItemID = n.openItemID }
             // Back-nav inside the vault: ⌘← (menu) and ⌘[ / swipe / side-button (routed via .goBack
-            // for internal surfaces) all pop detail/edit → list.
+            // for internal surfaces) pop one level; at the list root they close the vault surface.
             .onReceive(NotificationCenter.default.publisher(for: .goBack)) { _ in goBack() }
+            // ESC: clear an active search first (one press), then pop one level, then close the surface.
+            // Uses a window-level key catcher so it works regardless of which control holds focus
+            // (the editor's Cancel button keeps its own .cancelAction; both pop one level, no double).
+            .background(EscapeCatcher { escape() })
             // ⌘F focuses the search field.
             .background {
                 Button("") { searchFocusToken += 1 }
@@ -116,36 +114,47 @@ struct VaultListView: View {
         totpImporter.finish()
     }
 
+    /// One Back: pop a level; at the list root, close the vault surface (→ the tab you came from),
+    /// consistent with the ephemeral-internal-surface rule.
     private func goBack() {
-        switch mode {
-        case .list: break
-        case .detail: mode = .list
-        case .edit(let id): mode = id == nil ? .list : .detail(id!)
+        if !nav.pop() { NotificationCenter.default.post(name: .closeVaultSurface, object: nil) }
+    }
+
+    /// One ESC: clear an active search field first (consuming that press), otherwise behave as Back.
+    private func escape() {
+        switch nav.current {
+        case .none where !query.isEmpty:            query = ""; return     // list search
+        case .securityCheck where !scQuery.isEmpty: scQuery = ""; return   // Security Check search
+        default: goBack()
         }
     }
 
     @ViewBuilder private var content: some View {
-        switch mode {
-        case .list:
+        switch nav.current {
+        case .none:
             listPage
         case .detail(let id):
             if let item = gate.items.first(where: { $0.id == id }) {
-                detailScaffold(title: item.title.isEmpty ? "Login" : item.title) {
+                detailScaffold {
                     VaultItemView(item: item,
-                                  onEdit: { mode = .edit(id) },
-                                  onDelete: { Task { await gate.deleteItem(id); mode = .list } })
+                                  onEdit: { nav.push(.edit(id)) },
+                                  onDelete: { Task { await gate.deleteItem(id); nav.pop() } })
                 }
             } else { fallbackToList }
         case .edit(let id):
-            detailScaffold(title: id == nil ? "New Login" : "Edit Login") {
+            detailScaffold {
                 VaultEditView(existing: id.flatMap { gid in gate.items.first { $0.id == gid } }) {
-                    mode = id == nil ? .list : .detail(id!)
+                    nav.pop()
                 }
+            }
+        case .securityCheck:
+            detailScaffold {
+                SecurityCheckView(query: $scQuery, onOpenItem: { nav.push(.edit($0)) })
             }
         }
     }
 
-    private var fallbackToList: some View { Color.clear.onAppear { mode = .list } }
+    private var fallbackToList: some View { Color.clear.onAppear { _ = nav.pop() } }
 
     // MARK: - List (WF-4)
 
@@ -161,14 +170,17 @@ struct VaultListView: View {
                 noResultsMessage: "No matching logins",
                 searchFocusToken: searchFocusToken,
                 actions: {
-                    Button { mode = .edit(nil) } label: { Image(systemName: "plus") }
+                    Button { nav.push(.securityCheck) } label: { Image(systemName: "checkmark.shield") }
+                        .help("Security check — weak, reused, and 2FA-available logins")
+                        .disabled(gate.items.isEmpty)
+                    Button { nav.push(.edit(nil)) } label: { Image(systemName: "plus") }
                         .help("Add a login")
                 },
                 row: { item in
                     PageRow(host: item.hosts.first?.host ?? "",
                             primary: item.title.isEmpty ? (item.hosts.first?.host ?? "Login") : item.title,
                             secondary: item.hosts.first?.host,
-                            onOpen: { mode = .detail(item.id) }) {
+                            onOpen: { nav.push(.detail(item.id)) }) {
                         healthBadge(for: item)
                     }
                 }
@@ -223,10 +235,24 @@ struct VaultListView: View {
         .padding(.horizontal, 20).padding(.vertical, 8)
     }
 
+    /// WF-4 health badge — rendered from **cached** signals with NO decryption: intrinsic flags come
+    /// from `item.healthFlags`, reuse from the grouped keyed tokens in `gate.reusedItemIDs`. Preserves
+    /// the Slice-5 zero-decryption list property.
     @ViewBuilder private func healthBadge(for item: StoredItem) -> some View {
-        // Health flags are computed in Slice 9; for now only the (green) baseline shows.
-        if item.healthFlags != 0 {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        let flags = item.isLogin ? HealthFlags(rawValue: item.healthFlags) : []
+        let reused = item.isLogin && gate.reusedItemIDs.contains(item.id)
+        HStack(spacing: 5) {
+            if flags.contains(.weak) || reused {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    .help(flags.contains(.weak) && reused ? "Weak and reused password"
+                          : (flags.contains(.weak) ? "Weak password" : "Reused password"))
+            }
+            if flags.contains(.twoFAAvailable) {
+                Image(systemName: "lock.shield").foregroundStyle(.blue).help("Two-factor available for this site")
+            }
+            if flags.contains(.junkHost) {
+                Image(systemName: "questionmark.circle").foregroundStyle(.orange).help("Needs attention — no usable website")
+            }
         }
     }
 
@@ -248,10 +274,10 @@ struct VaultListView: View {
 
     // MARK: - Detail/edit chrome (manual back, no NavigationStack double-chrome)
 
-    private func detailScaffold<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+    private func detailScaffold<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Button { mode = .list } label: { Label("Vault", systemImage: "chevron.left") }
+                Button { goBack() } label: { Label("Back", systemImage: "chevron.left") }
                     .buttonStyle(.plain)
                 Spacer()
             }

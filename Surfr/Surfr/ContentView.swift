@@ -33,6 +33,9 @@ extension Notification.Name {
     static let openShortcuts = Notification.Name("openShortcuts")
     /// Vault (F5, Slice 3): open the password vault — routes to first-run / unlock / surface.
     static let openVault = Notification.Name("openVault")
+    /// Vault (F5, Slice 9): close the vault surface and return to the prior tab — Back/ESC at the
+    /// vault-list root, consistent with the ephemeral-internal-surface rule.
+    static let closeVaultSurface = Notification.Name("closeVaultSurface")
     /// Vault (F5, debug): erase the vault (SQLite + Keychain) and return to a clean first-run.
     static let resetVault = Notification.Name("resetVault")
     /// Autofill (F5, Slice 8a): ⌘\ — summon the inline credential picker for the active page.
@@ -1579,7 +1582,10 @@ struct ContentView: View {
     @State private var saveAfterUnlock = false
 
     var body: some View {
-        HStack(spacing: 0) {
+        // This body is a very long modifier chain; it is split across `let`s so the Swift type-checker
+        // checks each segment independently (otherwise it times out — "unable to type-check in
+        // reasonable time"). The splits are purely structural; the view is unchanged.
+        let base = HStack(spacing: 0) {
             RailView(browser: browser)
             Divider()
             ZStack {
@@ -1684,6 +1690,7 @@ struct ContentView: View {
             await ContentBlocker.shared.prepare()
             ContentBlocker.shared.startBackgroundRefresh()   // periodic + on-foreground staleness re-check
         }
+        let mid = base
         .task {
             // Load persisted downloads: migrate prior-run in-progress → interrupted,
             // prune past the retention window, then populate the list (slice 9c+).
@@ -1740,6 +1747,7 @@ struct ContentView: View {
             vault.lockNow()
             saveCoordinator.dismiss()   // security boundary: zero any pending captured credential
         }
+        return mid
         .onReceive(NotificationCenter.default.publisher(for: .openVault)) { _ in
             showSpotlight = false   // don't leave the omnibox overlay lingering under the vault overlay
             // Route by vault phase: unlocked → open the surface; new → first-run; locked → unlock.
@@ -1752,6 +1760,11 @@ struct ContentView: View {
             case .locked, .firstRun:
                 showVault = true
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .closeVaultSurface)) { _ in
+            // Back/ESC at the vault-list root closes the (ephemeral) vault surface, returning to the
+            // remembered tab — never a dead-end (handled by closeActiveSurfaceReturning).
+            if browser.activeTab.kind == .vault { browser.dismissActiveSurface() }
         }
         .onReceive(NotificationCenter.default.publisher(for: .fillCredential)) { _ in
             summonAutofill()

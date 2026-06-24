@@ -1,6 +1,18 @@
 import Foundation
 import GRDB
 
+// MARK: - Item type markers
+
+/// The `items.type` vocabulary. Only `login` participates in autofill + the Security Check audit;
+/// everything else is stored and displayed but not audited/filled. `secureNote` is the catch-all
+/// non-login marker (LastPass exports Secure Notes / Credit Cards / Addresses as notes with host
+/// `sn`); the upcoming typed-vault slice refines it into note/address/payment by parsing the body.
+public enum VaultItemType {
+    public static let login = "login"
+    public static let secureNote = "secureNote"   // non-login catch-all (host "sn"); not audited/filled
+    public static let passkey = "passkey"         // reserved (v2)
+}
+
 // MARK: - Public item model (ciphertext only — never a decrypted payload)
 
 /// One host associated with an item (drives URL matching for fill, Slice 8). Cleartext metadata.
@@ -43,6 +55,10 @@ public struct StoredItem: Equatable, Sendable, Identifiable {
         self.hosts = hosts
         self.healthFlags = healthFlags
     }
+
+    /// Only login items are autofilled + audited (vault-spec §7/§10). Non-login items (e.g. imported
+    /// secure notes / cards) are stored and shown, but excluded from matching, badges, and the audit.
+    public var isLogin: Bool { type == VaultItemType.login }
 }
 
 public enum VaultStoreError: Error, Equatable {
@@ -198,6 +214,80 @@ public final class VaultStore: Sendable {
         try await dbQueue.write { db in
             try ItemRow.deleteAll(db)      // item_hosts + audit_cache cascade via FK
             try MetaRow.deleteAll(db)
+            try db.execute(sql: "DELETE FROM audit_meta")
+        }
+    }
+
+    // MARK: audit cache (Slice 9 — keyed reuse tokens + health flags; ZERO decryption in this layer)
+
+    /// All keyed reuse tokens, `item_id → reuse_token`. The audit surface and the WF-4 list badges
+    /// group these (an item is "reused" iff its token appears on ≥2 items) **without decrypting
+    /// anything**. The token is `HMAC-SHA256(audit_key, password)` — equality only, never the password.
+    public func auditTokens() async throws -> [UUID: Data] {
+        try await dbQueue.read { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT item_id, reuse_token FROM audit_cache")
+            var out: [UUID: Data] = [:]
+            for r in rows {
+                let idString: String = r["item_id"]
+                guard let id = UUID(uuidString: idString) else { continue }
+                out[id] = r["reuse_token"]
+            }
+            return out
+        }
+    }
+
+    /// Persist one item's audit result in a single write: the intrinsic `health_flags` bitfield **and**
+    /// its reuse token (passing `reuseToken: nil` removes the token — used for a password-less item).
+    /// Called per item during the backfill walk and on every save/edit/import (steady-state keying).
+    public func setHealth(flags: Int, reuseToken: Data?, forItemID id: UUID, computedAt: Date) async throws {
+        try await dbQueue.write { db in
+            try db.execute(sql: "UPDATE items SET health_flags = ? WHERE id = ?",
+                           arguments: [flags, id.uuidString])
+            if let token = reuseToken {
+                try db.execute(sql: """
+                    INSERT INTO audit_cache (item_id, reuse_token, computed_at) VALUES (?, ?, ?)
+                    ON CONFLICT(item_id) DO UPDATE SET reuse_token = excluded.reuse_token,
+                                                       computed_at = excluded.computed_at
+                    """, arguments: [id.uuidString, token, computedAt])
+            } else {
+                try db.execute(sql: "DELETE FROM audit_cache WHERE item_id = ?", arguments: [id.uuidString])
+            }
+        }
+    }
+
+    /// Set an item's `type` (cleartext metadata; no key needed). Used to reclassify imported secure
+    /// notes (host `sn`) as non-login so they leave the audit + autofill paths.
+    public func setType(_ type: String, forItemID id: UUID) async throws {
+        try await dbQueue.write { db in
+            try db.execute(sql: "UPDATE items SET type = ? WHERE id = ?", arguments: [type, id.uuidString])
+        }
+    }
+
+    /// Drop every reuse token (without touching `health_flags`). Used when the persisted audit-key
+    /// self-check no longer matches — the cache is rebuilt from scratch under the live key.
+    public func clearAuditTokens() async throws {
+        try await dbQueue.write { db in try db.execute(sql: "DELETE FROM audit_cache") }
+    }
+
+    /// The audit bookkeeping row: the audit-key self-check and the last full-recompute time, or `nil`
+    /// before the first Security Check. The store rejects tokens whose key-check doesn't match the live
+    /// `audit_key` (the rotation invariant, vault-spec §6).
+    public func loadAuditMeta() async throws -> (keyCheck: Data, checkedAt: Date)? {
+        try await dbQueue.read { db in
+            guard let row = try Row.fetchOne(db, sql: "SELECT key_check, checked_at FROM audit_meta WHERE id = 1")
+            else { return nil }
+            let keyCheck: Data = row["key_check"]
+            let checkedAt: Date = row["checked_at"]
+            return (keyCheck, checkedAt)
+        }
+    }
+
+    public func saveAuditMeta(keyCheck: Data, checkedAt: Date) async throws {
+        try await dbQueue.write { db in
+            try db.execute(sql: """
+                INSERT INTO audit_meta (id, key_check, checked_at) VALUES (1, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET key_check = excluded.key_check, checked_at = excluded.checked_at
+                """, arguments: [keyCheck, checkedAt])
         }
     }
 
@@ -279,6 +369,25 @@ public final class VaultStore: Sendable {
                 t.column("signal", .text).notNull()                // weak · reused · 2fa_available
                 t.column("computed_at", .datetime).notNull()
                 t.primaryKey(["item_id", "signal"])
+            }
+        }
+        // Slice 9 — keyed audit cache. The original `audit_cache` (item_id, signal) was never
+        // populated; reshape it to `item_id → reuse_token` (one keyed HMAC token per item, equality
+        // only). `audit_meta` carries the audit-key self-check (rotation invariant) + last-check time.
+        migrator.registerMigration("v2_audit_keyed") { db in
+            try db.drop(table: "audit_cache")
+            try db.create(table: "audit_cache") { t in
+                t.column("item_id", .text).notNull()
+                    .references("items", onDelete: .cascade)
+                t.column("reuse_token", .blob).notNull()           // HMAC-SHA256(audit_key, password)
+                t.column("computed_at", .datetime).notNull()
+                t.primaryKey(["item_id"])                          // one token per item
+            }
+            try db.create(table: "audit_meta") { t in
+                t.primaryKey("id", .integer)
+                t.check(sql: "id = 1")                             // singleton
+                t.column("key_check", .blob).notNull()             // HMAC(audit_key, fixed sentinel)
+                t.column("checked_at", .datetime).notNull()
             }
         }
         return migrator

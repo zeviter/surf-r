@@ -32,8 +32,13 @@ let package = Package(
                 "CArgon2",
                 .product(name: "GRDB", package: "GRDB.swift"),
             ],
-            // Bundled EFF large wordlist (7776 words, CC-BY 3.0) for the Diceware generator — no network.
-            resources: [.process("Resources/eff_large_wordlist.txt")]
+            // Bundled, no-network datasets:
+            //  • EFF large wordlist (7776 words, CC-BY 3.0) for the Diceware generator.
+            //  • 2FA Directory TOTP snapshot (MIT, 2factorauth) for the Security Check 2FA-available signal.
+            resources: [
+                .process("Resources/eff_large_wordlist.txt"),
+                .process("Resources/twofa_totp_domains.json"),
+            ]
         ),
         .testTarget(
             name: "SurfrCoreTests",

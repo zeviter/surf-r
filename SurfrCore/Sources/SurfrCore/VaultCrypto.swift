@@ -284,6 +284,33 @@ public enum VaultCrypto {
         return (updated, vaultKey)
     }
 
+    // MARK: Audit signals (Slice 9) — keyed, zero-knowledge-of-password derivations
+
+    /// The audit sub-key: `HKDF-SHA256(vaultKey, info: "surfr-audit-v1")`. In-memory only while
+    /// UNLOCKED; **stable across master-password changes** because those re-wrap the vault key rather
+    /// than regenerating it. INVARIANT: if the vault key were ever rotated, every `audit_cache` token
+    /// would have to be rebuilt — `auditKeyCheck` lets the store enforce that structurally.
+    public static func deriveAuditKey(vaultKey: SymmetricKey) -> SymmetricKey {
+        HKDF<SHA256>.deriveKey(inputKeyMaterial: vaultKey,
+                               info: Data("surfr-audit-v1".utf8),
+                               outputByteCount: 32)
+    }
+
+    /// Keyed reuse token: `HMAC-SHA256(audit_key, normalizedPassword)`. Reveals only **equality**
+    /// between passwords (same password ⇒ same token), never the password, and is **not
+    /// offline-guessable** without `audit_key` (which exists only in memory while unlocked). This is
+    /// the only password-derived value the audit cache ever stores — **never** a bare/unsalted hash.
+    public static func auditReuseToken(normalizedPassword: Data, auditKey: SymmetricKey) -> Data {
+        Data(HMAC<SHA256>.authenticationCode(for: normalizedPassword, using: auditKey))
+    }
+
+    /// A keyed self-check proving a given `audit_key` matches the one a cache was built under. Changes
+    /// iff the vault key changes (it doesn't, by design). The store persists this once and refuses to
+    /// trust reuse tokens computed under a different key — rebuilding the cache instead.
+    public static func auditKeyCheck(auditKey: SymmetricKey) -> Data {
+        Data(HMAC<SHA256>.authenticationCode(for: Data("surfr-audit-keycheck-v1".utf8), using: auditKey))
+    }
+
     // MARK: Recovery code (vault-spec §14 default: grouped alphanumeric)
 
     /// Crockford base-32 alphabet (omits `I L O U` to avoid transcription ambiguity). 32 symbols → a

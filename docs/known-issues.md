@@ -35,11 +35,12 @@ Parked edge cases — documented for transparency, not scheduled for a fix yet.
 | Cross-origin iframe logins | A login form in a **cross-origin iframe** isn't filled (detection runs per-frame but matching/fill is main + same-origin only). | Low | Deferred from 8a; documented. |
 | Closed shadow-root logins | Fields inside a **closed** shadow root are invisible to detection/fill (only open roots are pierced). | Low | Inherent — closed roots are inaccessible by design. |
 
-## Vault import — junk hosts (`Surfr/Surfr/CSVImport.swift`, `VaultGate`)
+## Vault import — non-login items & hostless logins (`Surfr/Surfr/CSVImport.swift`, `VaultGate`)
 
 | Issue | Current behaviour | Severity | Notes / workaround |
 |---|---|---|---|
-| Junk `item_hosts` from messy imports | Some imported rows can carry a non-sensible registrable domain (e.g. `sn`, or an empty string from a URL that didn't parse), so the item won't match any real site for autofill. The `loadItems` repair normalizes/recovers hosts from the payload URL where possible, but can't invent a host that was never present. | Low — affects autofill match for those rows only | Edit the item's website to fix the host. **Planned cleanup: vault Slice 9** (surface + fix junk hosts as part of the security/health check). |
+| LastPass Secure Notes / Cards / Addresses import with host `sn` | LastPass exports Secure Notes, Credit Cards, and Addresses as secure notes with `url=http://sn`. **Slice 9 recognizes `host == "sn"` as a non-login marker**: such items are reclassified `type = secureNote`, **excluded** from the Security Check audit (never flagged weak/reused/2FA/needs-attention — a card number is never scanned as a password) **and** from autofill matching, while remaining visible in the vault. They are **not** treated as junk login hosts. | Resolved (recognized) | Full type-specialization (Note/Address/Payment editors, parsing the `NoteType` body) is the upcoming **typed-vault** slice; for now they're stored + displayed as-is. |
+| Hostless / unresolvable **login** items | A genuine login whose `item_hosts` is empty (an early import where URL parsing stored nothing) is surfaced under Security Check "Needs attention"; the unambiguous case (a payload URL that parses to a real registrable domain) is **auto-fixed** by `loadItems` / the audit walk. A login with no host and no recoverable URL is surfaced for a manual website edit, never guessed. | Low — affects autofill match for those rows only | Edit the item's website to fix the host. Empty-string-host login handling is unchanged by the `sn` recognition above. |
 
 ## Save-on-submit (`Surfr/Surfr/Autofill.js`, Slice 8b)
 

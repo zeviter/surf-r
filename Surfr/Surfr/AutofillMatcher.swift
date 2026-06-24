@@ -25,6 +25,8 @@ enum AutofillMatcher {
 
         return items
             .filter { item in
+                // Only login items are offerable — never an imported secure note / card / address.
+                item.isLogin &&
                 item.hosts.contains { TrustStore.registrableDomain(forHostOrURL: $0.host).lowercased() == pageDomain }
             }
             .sorted { a, b in
