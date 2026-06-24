@@ -172,17 +172,22 @@ public enum TypedNoteParser {
         )
     }
 
-    /// LastPass phone fields arrive as JSON (`{"num":"+44…","cc3l":"GBR","ext":""}`). Parse leniently for
-    /// the number (+ `cc3l`); **on any failure keep the raw string** — never drop data.
-    static func parsePhone(_ raw: String) -> (number: String, country: String?) {
+    /// LastPass phone fields arrive as JSON (`{"num":"+44…","cc3l":"GBR","ext":""}`). Parse leniently:
+    /// - JSON that **parses successfully** → use `num` (+ `cc3l`); an **empty `num` is an empty phone**
+    ///   (`("", nil)`), NOT the raw JSON — an all-empty object like `{"num":"","cc3l":""}` is no data,
+    ///   not a parse failure.
+    /// - JSON that **fails to parse** (malformed) or any non-JSON text → keep the raw string (could be a
+    ///   plain number). Never drop a real value.
+    public static func parsePhone(_ raw: String) -> (number: String, country: String?) {
         let trimmed = raw.trimmingCharacters(in: .whitespaces)
-        guard trimmed.hasPrefix("{"), let data = trimmed.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return (raw, nil)
+        if trimmed.hasPrefix("{"), let data = trimmed.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let num = (obj["num"] as? String)?.trimmingCharacters(in: .whitespaces) ?? ""
+            guard !num.isEmpty else { return ("", nil) }     // empty JSON object → empty phone
+            let cc = (obj["cc3l"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            return (num, cc)
         }
-        let num = (obj["num"] as? String).map { $0.trimmingCharacters(in: .whitespaces) } ?? raw
-        let cc = (obj["cc3l"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        return (num.isEmpty ? raw : num, cc)
+        return (raw, nil)   // not JSON, or malformed JSON → keep raw verbatim
     }
 
     /// Map an absent OR blank field to `nil` — so a UK address (no `State:` line, or a blank one) leaves

@@ -58,6 +58,9 @@ struct PageRow<Trailing: View>: View {
     let primary: String
     let secondary: String?
     let trailingMeta: String?
+    /// When set, render this SF Symbol glyph as the leading icon instead of the favicon — for non-host
+    /// rows (typed-vault notes/addresses/payment), which have no first-party favicon.
+    let leadingSystemImage: String?
     let onOpen: () -> Void
     /// Trailing controls (e.g. a delete ✕, or Open + untrust). Caller-supplied so
     /// the same row serves pages with different actions.
@@ -67,29 +70,42 @@ struct PageRow<Trailing: View>: View {
          primary: String,
          secondary: String? = nil,
          trailingMeta: String? = nil,
+         leadingSystemImage: String? = nil,
          onOpen: @escaping () -> Void,
          @ViewBuilder trailing: @escaping () -> Trailing) {
         self.host = host
         self.primary = primary
         self.secondary = secondary
         self.trailingMeta = trailingMeta
+        self.leadingSystemImage = leadingSystemImage
         self.onOpen = onOpen
         self.trailing = trailing
     }
 
     @ObservedObject private var trustStore = TrustStore.shared
-    private var trusted: Bool { trustStore.isTrusted(host: host) }
+    private var trusted: Bool { leadingSystemImage == nil && trustStore.isTrusted(host: host) }
     @State private var hovering = false
+
+    @ViewBuilder private var leading: some View {
+        if let glyph = leadingSystemImage {
+            Image(systemName: glyph)
+                .font(.system(size: 15)).foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.12)))
+        } else {
+            FaviconView(host: host, size: 28, cornerRadius: 6)
+                .overlay(alignment: .topTrailing) {
+                    if trusted { TrustedBadge().offset(x: 4, y: -4) }
+                }
+        }
+    }
 
     var body: some View {
         HStack(spacing: 10) {
             // The whole favicon + text + meta region is one full-width/height tap target — clicking
             // anywhere on the row opens it (the trailing controls stay separate).
             HStack(spacing: 10) {
-                FaviconView(host: host, size: 28, cornerRadius: 6)
-                    .overlay(alignment: .topTrailing) {
-                        if trusted { TrustedBadge().offset(x: 4, y: -4) }
-                    }
+                leading
                 VStack(alignment: .leading, spacing: 2) {
                     Text(primary.isEmpty ? host : primary).lineLimit(1)
                     if let secondary, !secondary.isEmpty {
@@ -146,6 +162,9 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
     let noResultsMessage: String
     /// Bump to grab first-responder on the search field (e.g. ⌘F). Default 0 = no auto-focus.
     let searchFocusToken: Int
+    /// Optional accessory rendered **between the title row and the search field** (e.g. the typed-vault
+    /// segmented control). `nil` for the plain pages (history/trusted/downloads).
+    let headerAccessory: AnyView?
     @ViewBuilder let actions: () -> Actions
     @ViewBuilder let row: (Item) -> Row
 
@@ -159,6 +178,7 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
          emptyHint: String? = nil,
          noResultsMessage: String = "No results",
          searchFocusToken: Int = 0,
+         headerAccessory: AnyView? = nil,
          @ViewBuilder actions: @escaping () -> Actions,
          @ViewBuilder row: @escaping (Item) -> Row) {
         self.title = title
@@ -169,6 +189,7 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
         self.emptyHint = emptyHint
         self.noResultsMessage = noResultsMessage
         self.searchFocusToken = searchFocusToken
+        self.headerAccessory = headerAccessory
         self.actions = actions
         self.row = row
     }
@@ -183,6 +204,12 @@ struct SearchFilterPage<Item: Identifiable, Row: View, Actions: View>: View {
             .padding(.horizontal, 20)
             .padding(.top, 18)
             .padding(.bottom, 12)
+
+            if let headerAccessory {
+                headerAccessory
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 12)
+            }
 
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)

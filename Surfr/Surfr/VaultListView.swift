@@ -50,16 +50,59 @@ struct VaultListView: View {
     @StateObject private var totpImporter = TOTPImportCoordinator()
 
     @State private var restoredItem = false
+    @State private var segment: Segment = .passwords    // WF-12; persisted for the session via the gate
+    @State private var showTypePicker = false           // WF-13 add-new overlay
+
+    /// The four typed-vault segments (WF-12). Each maps to a `VaultItemType`; the list source, search
+    /// prompt, empty message, and row glyph follow the selection.
+    private enum Segment: String, CaseIterable, Identifiable {
+        case passwords, notes, addresses, payment
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .passwords: return "Passwords"; case .notes: return "Notes"
+            case .addresses: return "Addresses"; case .payment: return "Payment"
+            }
+        }
+        var type: String {
+            switch self {
+            case .passwords: return VaultItemType.login;   case .notes: return VaultItemType.secureNote
+            case .addresses: return VaultItemType.address; case .payment: return VaultItemType.payment
+            }
+        }
+        var rowGlyph: String {
+            switch self {
+            case .passwords: return ""; case .notes: return "note.text"
+            case .addresses: return "mappin.and.ellipse"; case .payment: return "creditcard"
+            }
+        }
+        var emptyMessage: String {
+            switch self {
+            case .passwords: return "No logins yet"; case .notes: return "No secure notes yet"
+            case .addresses: return "No addresses yet"; case .payment: return "No payment methods yet"
+            }
+        }
+        var searchPrompt: String {
+            switch self {
+            case .passwords: return "Search logins"; case .notes: return "Search notes"
+            case .addresses: return "Search addresses"; case .payment: return "Search cards"
+            }
+        }
+        static func from(type: String) -> Segment { Segment.allCases.first { $0.type == type } ?? .passwords }
+    }
 
     var body: some View {
         content
-            // Restore where the user was (search + open item) after navigate-away recreated the surface.
+            // Restore where the user was (segment + search + open item) after navigate-away recreated
+            // the surface (it's ephemeral).
             .onAppear {
                 query = gate.savedVaultQuery
+                segment = .from(type: gate.savedVaultSegment)
                 if let id = gate.savedVaultOpenItemID, gate.items.contains(where: { $0.id == id }) {
                     nav = VaultNav(); nav.push(.detail(id)); restoredItem = true
                 }
             }
+            .onChange(of: segment) { _, s in gate.savedVaultSegment = s.type }
             .onChange(of: gate.items) { _, items in   // open item may only be available after async load
                 guard !restoredItem, nav.atRoot, let id = gate.savedVaultOpenItemID,
                       items.contains(where: { $0.id == id }) else { return }
@@ -120,8 +163,10 @@ struct VaultListView: View {
         if !nav.pop() { NotificationCenter.default.post(name: .closeVaultSurface, object: nil) }
     }
 
-    /// One ESC: clear an active search field first (consuming that press), otherwise behave as Back.
+    /// One ESC: dismiss the type picker first, else clear an active search field (consuming that
+    /// press), otherwise behave as Back.
     private func escape() {
+        if showTypePicker { showTypePicker = false; return }   // overlay = top of stack
         switch nav.current {
         case .none where !query.isEmpty:            query = ""; return     // list search
         case .securityCheck where !scQuery.isEmpty: scQuery = ""; return   // Security Check search
@@ -130,63 +175,157 @@ struct VaultListView: View {
     }
 
     @ViewBuilder private var content: some View {
+        mainContent
+            .overlay {
+                if showTypePicker {
+                    ZStack {
+                        Color.black.opacity(0.18).ignoresSafeArea().onTapGesture { showTypePicker = false }
+                        TypePickerView(
+                            onSelect: { choice in
+                                showTypePicker = false
+                                switch choice {
+                                case .login:   nav.push(.editLogin(nil))
+                                case .note:    nav.push(.editNote(nil))
+                                case .address: nav.push(.editAddress(nil))
+                                }
+                            },
+                            onCancel: { showTypePicker = false }
+                        )
+                    }
+                }
+            }
+    }
+
+    @ViewBuilder private var mainContent: some View {
         switch nav.current {
         case .none:
             listPage
         case .detail(let id):
-            if let item = gate.items.first(where: { $0.id == id }) {
-                detailScaffold {
-                    VaultItemView(item: item,
-                                  onEdit: { nav.push(.edit(id)) },
-                                  onDelete: { Task { await gate.deleteItem(id); nav.pop() } })
-                }
-            } else { fallbackToList }
-        case .edit(let id):
-            detailScaffold {
-                VaultEditView(existing: id.flatMap { gid in gate.items.first { $0.id == gid } }) {
-                    nav.pop()
-                }
-            }
+            detailFor(id)
+        case .editLogin(let id):
+            detailScaffold { VaultEditView(existing: lookup(id)) { nav.pop() } }
+        case .editNote(let id):
+            detailScaffold { SecureNoteEditView(existing: lookup(id)) { nav.pop() } }
+        case .editAddress(let id):
+            detailScaffold { AddressEditView(existing: lookup(id)) { nav.pop() } }
         case .securityCheck:
-            detailScaffold {
-                SecurityCheckView(query: $scQuery, onOpenItem: { nav.push(.edit($0)) })
-            }
+            detailScaffold { SecurityCheckView(query: $scQuery, onOpenItem: { nav.push(.editLogin($0)) }) }
         }
+    }
+
+    private func lookup(_ id: UUID?) -> StoredItem? { id.flatMap { gid in gate.items.first { $0.id == gid } } }
+
+    /// Type-dispatched detail: login / secure note / address get their own view; payment shows the
+    /// honest interim placeholder until TV-2b.
+    @ViewBuilder private func detailFor(_ id: UUID) -> some View {
+        if let item = gate.items.first(where: { $0.id == id }) {
+            let del: () -> Void = { Task { await gate.deleteItem(id); nav.pop() } }
+            detailScaffold {
+                switch item.type {
+                case VaultItemType.secureNote:
+                    SecureNoteDetailView(item: item, onEdit: { nav.push(.editNote(id)) }, onDelete: del)
+                case VaultItemType.address:
+                    AddressDetailView(item: item, onEdit: { nav.push(.editAddress(id)) }, onDelete: del)
+                case VaultItemType.payment:
+                    PaymentInterimView(item: item, onDelete: del)
+                default:
+                    VaultItemView(item: item, onEdit: { nav.push(.editLogin(id)) }, onDelete: del)
+                }
+            }
+        } else { fallbackToList }
     }
 
     private var fallbackToList: some View { Color.clear.onAppear { _ = nav.pop() } }
 
-    // MARK: - List (WF-4)
+    // MARK: - List (WF-12 — segmented by type)
 
     private var listPage: some View {
         VStack(spacing: 0) {
             SearchFilterPage(
                 title: "Vault",
                 query: $query,
-                searchPrompt: "Search logins",
-                sections: sections,
-                emptyMessage: "No logins yet",
+                searchPrompt: segment.searchPrompt,
+                sections: typedSections,
+                emptyMessage: segment.emptyMessage,
                 emptyHint: "Add one with the + button.",
-                noResultsMessage: "No matching logins",
+                noResultsMessage: "No matches",
                 searchFocusToken: searchFocusToken,
+                headerAccessory: AnyView(segmentedControl),
                 actions: {
                     Button { nav.push(.securityCheck) } label: { Image(systemName: "checkmark.shield") }
                         .help("Security check — weak, reused, and 2FA-available logins")
-                        .disabled(gate.items.isEmpty)
-                    Button { nav.push(.edit(nil)) } label: { Image(systemName: "plus") }
-                        .help("Add a login")
+                        .disabled(count(.passwords) == 0)
+                    Button { showTypePicker = true } label: { Image(systemName: "plus") }
+                        .help("Add an item")
                 },
-                row: { item in
-                    PageRow(host: item.hosts.first?.host ?? "",
-                            primary: item.title.isEmpty ? (item.hosts.first?.host ?? "Login") : item.title,
-                            secondary: item.hosts.first?.host,
-                            onOpen: { nav.push(.detail(item.id)) }) {
-                        healthBadge(for: item)
-                    }
-                }
+                row: { item in typedRow(item) }
             )
             Divider()
             securityBar   // security-relevant controls stay VISIBLE with their state (not in a menu)
+        }
+    }
+
+    /// The WF-12 segmented control — surf-r vocabulary, **system-accent tracking** (`Color.accentColor`,
+    /// never a hardcoded blue): a rounded neutral container with quiet dividers. The **active** segment is
+    /// the coloured one — **accent title** + an **accent count pill with a white number**. **Inactive**
+    /// segments go fully **grey** — grey title + grey pill + grey number — so they recede. No filled slab.
+    private var segmentedControl: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(Segment.allCases.enumerated()), id: \.element.id) { index, seg in
+                if index > 0 { Divider().frame(height: 14).opacity(0.5) }
+                segmentButton(seg)
+            }
+        }
+        .padding(3)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.gray.opacity(0.12)))
+        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.gray.opacity(0.18)))
+    }
+
+    private func segmentButton(_ seg: Segment) -> some View {
+        let active = segment == seg
+        return Button { segment = seg } label: {
+            HStack(spacing: 6) {
+                Text(seg.title)
+                    .font(.callout).fontWeight(active ? .semibold : .regular)
+                    .foregroundStyle(active ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                countPill(count(seg), active: active)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The count pill (smaller than the title). **Active** → **accent** fill with a **white** number
+    /// (matches the lit accent title). **Inactive** → fully **grey** (grey fill + grey number) so the
+    /// whole segment recedes. The accent is the system accent.
+    private func countPill(_ n: Int, active: Bool) -> some View {
+        Text("\(n)")
+            .font(.caption2).fontWeight(.semibold).monospacedDigit()
+            .foregroundStyle(active ? AnyShapeStyle(Color.white) : AnyShapeStyle(.secondary))
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(Capsule().fill(active ? Color.accentColor : Color.secondary.opacity(0.18)))
+    }
+
+    private func count(_ seg: Segment) -> Int { gate.items.lazy.filter { $0.type == seg.type }.count }
+
+    /// Rows per the active segment. Passwords keep the favicon + host + health badge; the typed segments
+    /// use a generic glyph + title (label/nickname). **No payload is decrypted to draw a row** — the
+    /// Slice-5 zero-decryption-list invariant holds across all four segments.
+    @ViewBuilder private func typedRow(_ item: StoredItem) -> some View {
+        switch segment {
+        case .passwords:
+            PageRow(host: item.hosts.first?.host ?? "",
+                    primary: item.title.isEmpty ? (item.hosts.first?.host ?? "Login") : item.title,
+                    secondary: item.hosts.first?.host,
+                    onOpen: { nav.push(.detail(item.id)) }) { healthBadge(for: item) }
+        default:
+            PageRow(host: "",
+                    primary: item.title.isEmpty ? "Untitled" : item.title,
+                    secondary: nil,
+                    leadingSystemImage: segment.rowGlyph,
+                    onOpen: { nav.push(.detail(item.id)) }) { EmptyView() }
         }
     }
 
@@ -256,9 +395,12 @@ struct VaultListView: View {
         }
     }
 
-    private var sections: [PageSection<StoredItem>] {
+    /// Sections for the ACTIVE segment, filtered by title/host only (never decrypting a payload to
+    /// search — note bodies / address PII / card fields are not searchable).
+    private var typedSections: [PageSection<StoredItem>] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let filtered = q.isEmpty ? gate.items : gate.items.filter {
+        let inSegment = gate.items.filter { $0.type == segment.type }
+        let filtered = q.isEmpty ? inSegment : inSegment.filter {
             $0.title.lowercased().contains(q) || $0.hosts.contains { $0.host.lowercased().contains(q) }
         }
         let grouped = Dictionary(grouping: filtered) { (item: StoredItem) -> String in

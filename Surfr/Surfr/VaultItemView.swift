@@ -129,58 +129,10 @@ struct VaultItemView: View {
     let onDelete: () -> Void
 
     @State private var confirmingDelete = false
-    @State private var typedDecodes: Bool?   // nil = not yet checked; false = genuine decrypt/parse failure
 
+    // Login detail (WF-5). Secure notes / addresses / payment have their own typed views
+    // (`SecureNoteDetailView` / `AddressDetailView` / `PaymentInterimView`); this is login-only.
     var body: some View {
-        // Typed items (payment/address) have no detail view until TV-2. Show an HONEST interim state —
-        // distinct from a decryption-failure message, which would be a false signal for intact data.
-        // Logins + secure notes use the full view below (secure notes render title + body unchanged).
-        if item.type == VaultItemType.payment || item.type == VaultItemType.address {
-            typedInterimView
-        } else {
-            loginNoteBody
-        }
-    }
-
-    /// Honest interim state for a typed item whose payload decodes fine but has no view yet. Only shows
-    /// the real "Couldn't decrypt" error if the typed payload genuinely fails to decode (so a real
-    /// failure is never papered over). No new view work — placeholder + a type check (TV-1).
-    private var typedInterimView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 12) {
-                    Image(systemName: item.type == VaultItemType.payment ? "creditcard" : "mappin.and.ellipse")
-                        .font(.system(size: 30)).foregroundStyle(.secondary)
-                    Text(item.title.isEmpty ? "Item" : item.title).font(.title2).bold()
-                }
-                if typedDecodes == false {
-                    Label("Couldn’t decrypt this item.", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                } else {
-                    Label(item.type == VaultItemType.payment
-                            ? "Card details — full view coming in the next update."
-                            : "Address details — full view coming in the next update.",
-                          systemImage: "info.circle")
-                        .foregroundStyle(.secondary)
-                }
-                HStack { Spacer(); Button("Delete", role: .destructive) { confirmingDelete = true } }
-                    .padding(.top, 8)
-            }
-            .padding(24).frame(maxWidth: 560, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity)
-        // Distinguish "decoded fine, no view yet" (interim copy) from a genuine decrypt/parse failure.
-        .task {
-            typedDecodes = (item.type == VaultItemType.payment)
-                ? (gate.decryptPayment(item) != nil)
-                : (gate.decryptAddress(item) != nil)
-        }
-        .confirmationDialog("Delete this item?", isPresented: $confirmingDelete) {
-            Button("Delete", role: .destructive, action: onDelete)
-        }
-    }
-
-    private var loginNoteBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack(spacing: 12) {

@@ -24,19 +24,22 @@
 - ☐ **Password manager — system AutoFill extension (F5, vault Slice 10).** `ASCredentialProviderExtension`
   (+ passkeys) so credentials fill across all apps; relocate `LoginPayload` to `SurfrCore`. Apple-gated.
 - ◐ **Typed vault — Secure Notes / Addresses / Payment Methods** (`docs/typed-vault-wireframes.md`,
-  WF-11+). **TV-1 done** (data model + LastPass `NoteType` parsing + one-time re-classification of the
-  Slice-9 `secureNote` items into payment/address; headless, unit-tested). **TV-2 next** — segmented
-  vault list (WF-12) + type picker (WF-13) + per-type detail/edit/copy (WF-15/16/17) + uniform ESC/back
-  nav (WF-19); no web fill; most of the user-visible value. **TV-3** — card/address click-to-fill (WF-18);
-  **pairs with Slice 10 as the autofill block**, sharing the `SurfrCore` extraction.
+  WF-11+). **TV-1 done** (data model + LastPass `NoteType` parsing + one-time re-classification).
+  **TV-2a done** — segmented vault list (WF-12) + type picker (WF-13, Payment disabled) + Secure Note &
+  Address detail/edit/copy (WF-15/16) + nav inheritance (WF-19). Typed rows are **glyph + title** (the
+  "Name · City" / "•••• last4" secondaries need a §10 cleartext display-hint, deferred to TV-2b — drawing
+  them now would either decrypt on list-draw or grow cleartext metadata). **TV-2b next** — Payment detail/
+  edit (WF-17): card-number/CVV masking + biometric reveal + card-type detection + the cleartext last-4
+  Payment-row hint. **TV-3** — card/address click-to-fill (WF-18); **pairs with Slice 10**, sharing the
+  `SurfrCore` extraction.
   - ☐ **(post-v1) First-class long-tail editors** (Passport / Bank Account / Wi-Fi / SSH Key / SSN …):
     v1 keeps them as generic Secure Notes with the raw body preserved verbatim; structured editors deferred.
   - ☐ **(post-v1) "Convert type" flow** (e.g. note → payment): v1 is create-as-type only; a mis-imported
     item is fixed by re-creating it.
-  - **Interim (TV-1→TV-2):** re-classified payment/address items have no typed detail view yet, so
-    opening one shows an **honest interim placeholder** ("Card/Address details — full view coming in the
-    next update") — **not** a decryption-failure message (the payload decodes fine; a real decode failure
-    still shows the true error). Headless by design; list rendering + audit + autofill are unaffected.
+  - **Interim (now PAYMENT-only, until TV-2b):** addresses + notes have real views as of TV-2a; only
+    **payment** items show the honest interim placeholder ("Card details — full view coming in the next
+    update") — **not** a decryption-failure message (the payload decodes fine; a real decode failure
+    still shows the true error). List rendering + audit + autofill unaffected.
 - ☐ **2FA Directory snapshot goes stale (vault Slice 9 upkeep).** The bundled
   `SurfrCore/.../twofa_totp_domains.json` (TOTP-supporting registrable domains, MIT, dated 2026-06-24)
   has **no runtime refresh by design** — re-snapshot from the 2fa.directory v4 API and re-bundle on a

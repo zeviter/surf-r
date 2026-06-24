@@ -138,6 +138,16 @@ final class TypedVaultTests: XCTestCase {
         XCTAssertEqual(TypedNoteParser.parsePhone(#"{"num":broken"#).number, #"{"num":broken"#)
     }
 
+    func test_phone_emptyJSONObject_isEmpty_notRaw() {
+        // An all-empty object is NO data, not a parse failure → empty field (omitted in detail), never
+        // the raw JSON string.
+        let r = TypedNoteParser.parsePhone(#"{"num":"","ext":"","cc3l":""}"#)
+        XCTAssertEqual(r.number, "")
+        XCTAssertNil(r.country)
+        // Whitespace-only num is likewise empty.
+        XCTAssertEqual(TypedNoteParser.parsePhone(#"{"num":"  ","cc3l":"GBR"}"#).number, "")
+    }
+
     // MARK: Lossless
 
     func test_lossless_unmappedLabelSurvivesInRawBody() {

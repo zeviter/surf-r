@@ -286,6 +286,8 @@ final class VaultGate: ObservableObject {
     /// surface is ephemeral). Restored by `VaultListView`. Cleared on lock/reset.
     var savedVaultQuery = ""
     var savedVaultOpenItemID: UUID?
+    /// The selected typed-vault segment (WF-12), persisted for the session (raw `VaultItemType`).
+    var savedVaultSegment: String = VaultItemType.login
 
     /// (Re)load the list. Only the cleartext metadata is read; payloads stay encrypted on disk.
     static let hostRecoveryAttemptedKey = "SurfrVaultHostRecoveryAttemptedIDs"
@@ -369,13 +371,23 @@ final class VaultGate: ObservableObject {
         }
     }
 
-    /// Decrypt an `address`-typed item's structured payload (TV-1 storage shape).
+    /// Decrypt an `address`-typed item's structured payload (TV-1 storage shape). Self-heals a phone
+    /// that an earlier (TV-1) parse left as a raw/empty JSON blob: re-applying the fixed `parsePhone`
+    /// turns `{"num":"",…}` into an empty field and leaves a real number unchanged (idempotent), so the
+    /// already-migrated addresses display correctly without a re-migration (and edit-then-save persists
+    /// the clean value).
     func decryptAddress(_ item: StoredItem) -> AddressPayload? {
         guard phase == .unlocked else { return nil }
         return try? lock.withVaultKey { key in
             var data = try VaultCrypto.decryptItem(item.sealed, vaultKey: key)
             defer { data.resetBytes(in: 0..<data.count) }
-            return try AddressPayload.decoded(from: data)
+            var address = try AddressPayload.decoded(from: data)
+            let parsed = TypedNoteParser.parsePhone(address.phone)
+            if parsed.number != address.phone {              // phone was a JSON blob → heal on read
+                address.phone = parsed.number
+                address.phoneCountry = parsed.number.isEmpty ? nil : (address.phoneCountry ?? parsed.country)
+            }
+            return address
         }
     }
 
@@ -456,6 +468,28 @@ final class VaultGate: ObservableObject {
         guard let store else { return }
         try? await store.deleteItem(id: id)
         await loadItems()
+    }
+
+    /// Create (id == nil) or update a **non-login typed** item (secure note / address): encrypt the
+    /// already-encoded typed payload under a fresh per-item key, set its `type`, and refresh. Non-login
+    /// items carry **no** health flags and are **not** audited. (Payment editing is TV-2b.)
+    func saveTypedItem(id: UUID?, type: String, title: String, payloadData: Data,
+                       hosts: [SurfrCore.Host]) async {
+        guard let store, phase == .unlocked else { return }
+        do {
+            var data = payloadData
+            defer { data.resetBytes(in: 0..<data.count) }   // wipe the transient typed plaintext
+            let sealed = try lock.withVaultKey { key in try VaultCrypto.encryptNewItem(data, vaultKey: key) }
+            let existing = items.first { $0.id == id }
+            let now = self.now()
+            let item = StoredItem(id: id ?? UUID(), type: type, title: title,
+                                  createdAt: existing?.createdAt ?? now, modifiedAt: now,
+                                  sealed: sealed, hosts: hosts, healthFlags: 0)
+            try await store.upsert(item)
+            await loadItems()
+        } catch {
+            lastError = "Could not save the item."
+        }
     }
 
     // MARK: - Security check (Slice 9 / WF-9) — keyed-token, zero-decryption audit + junk-host hygiene

@@ -8,8 +8,10 @@ import Foundation
 struct VaultNav: Equatable {
     enum Screen: Equatable {
         case securityCheck
-        case detail(UUID)
-        case edit(UUID?)
+        case detail(UUID)               // type-dispatched detail (login / note / address / payment)
+        case editLogin(UUID?)           // nil = new
+        case editNote(UUID?)
+        case editAddress(UUID?)
     }
 
     private(set) var stack: [Screen] = []
@@ -33,7 +35,7 @@ struct VaultNav: Equatable {
     var openItemID: UUID? {
         switch current {
         case .detail(let id): return id
-        case .edit(let id): return id
+        case .editLogin(let id), .editNote(let id), .editAddress(let id): return id
         default: return nil
         }
     }

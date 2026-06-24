@@ -84,8 +84,8 @@ rail stays a single key glyph (green = active surface). Login rows unchanged fro
 |----|----|----|
 | Passwords | favicon tile + title(host) + username | health badge (green STRONG / amber WEAK·REUSED / blue TOTP) |
 | Notes | note glyph + title + 1-line snippet (title only if body sensitive) | — |
-| Addresses | pin glyph + label + "Name · City" | fill-available hint (TV-3) |
-| Payment | card-type glyph + nickname + "•••• last4" | fill-available hint (TV-3) |
+| Addresses | pin glyph + label | fill-available hint (TV-3) |
+| Payment | card glyph + nickname (TV-2a) → + network glyph + "•••• last4" (TV-2b) | fill-available hint (TV-3) |
 
 **Build rules — WF-12**
 - Single surface, single rail icon. Segmented control sits in the `PageScaffold` header, above the
@@ -98,6 +98,18 @@ rail stays a single key glyph (green = active surface). Login rows unchanged fro
   audits the **Passwords segment only**.
 - Reuse the existing favicon tile, badge vocabulary, active states. Address/Payment rows use generic
   glyphs (no favicon).
+- **Row secondaries vs. the zero-decryption invariant (§10).** A row is drawn from **cleartext
+  metadata only** — never a payload decrypt. So Address rows are **label-only** (`Name`/`City` are
+  encrypted-payload, not §10-sanctioned cleartext) and TV-2a Payment rows are **nickname-only**. The
+  `•••• last4` + network glyph (the §10-sanctioned cleartext last-4/type) land in **TV-2b**, where a
+  small cleartext display-hint is added alongside the payment view.
+- **Segmented control (as-built).** A **custom** control (not the native segmented control), tracking the
+  **system accent** (`Color.accentColor`, never a hardcoded blue) so it matches the OS + the rest of the
+  app's chrome. A rounded neutral container with quiet dividers; each segment is a title + a count pill to
+  its right. The **active** segment is the coloured one — **accent title** + an **accent count pill with a
+  white number** (title + pill read as one cohesive accent unit). **Inactive** segments go fully **grey**
+  (grey title + grey pill + grey number) so they recede. No filled slab; counts are smaller than titles.
+  (Supersedes the earlier "blue active fill".)
 
 ---
 
@@ -330,14 +342,24 @@ detection**. TV-3 is the heavy, deferrable web-fill piece.
 | Sub-slice | Ships | Effort |
 |----|----|----|
 | **TV-1** | Data model + type classification + LastPass `NoteType` parsing (payment/address field extraction; everything else → note with raw body). Headless, unit-tested against the real export samples. Re-classify the `secureNote`-marked items from the Slice-9 closeout. | low–med |
-| **TV-2** | Segmented vault list (WF-12) + type picker (WF-13) + per-type detail/edit/copy (WF-15/16/17) + the uniform ESC/back nav model (WF-19). No web fill. **Most of the user-visible value.** | med |
+| **TV-2a** ✅ | Segmented vault list (WF-12) + type picker (WF-13, Payment disabled) + Secure Note & Address detail/edit/copy (WF-15/16) + uniform ESC/back nav (WF-19). No payment detail/edit, no web fill. Typed rows are glyph + title (see As-built note). | med |
+| **TV-2b** | Payment Method detail/edit (WF-17): card-number/CVV masking + biometric reveal/copy (the password reveal path), card-type detection, the cleartext last-4/type Payment-row hint. Replaces the payment interim placeholder. | med |
 | **TV-3** | Click-to-fill for cards/addresses (WF-18): card/address web-form field detection in the isolated world + per-field overlay icon + multi-choice picker. **Pairs with Slice 10 as the autofill block** (shared `SurfrCore` extraction); deferrable without blocking TV-1/TV-2. | med–high |
 
 **Sequencing**
 - **TV-1 done** (data model + `NoteType` parsing + one-time re-classification; headless, unit-tested).
-  **TV-2 next** (segmented list + type picker + per-type detail/edit/copy + ESC/back nav) — with TV-1+TV-2
-  the **vault is fully built**. **TV-3 pairs with Slice 10 as the autofill block**, sharing the
-  `SurfrCore` extraction (`LoginPayload` / PSL / matcher relocation).
+- **TV-2a done** — segmented vault list (WF-12) + type picker (WF-13, Payment disabled) + Secure Note
+  & Address detail/edit/copy (WF-15/16) + nav inheritance (WF-19). **No payment detail/edit, no fill.**
+  - **As-built row content (zero-decryption invariant, §10):** typed rows show **glyph + title**
+    (label/nickname) only. The WF-12 "Name · City" / "•••• last4" secondaries are deferred — they'd need
+    either a payload decrypt on list draw (violates §10) or a §10-sanctioned **cleartext last-4/type
+    display hint** (a small storage addition). That hint lands with **TV-2b** (payment), where last-4 is
+    needed anyway. Address rows stay label-only (city is not §10-sanctioned cleartext).
+- **TV-2b next** — Payment Method detail/edit (WF-17): card-number/CVV masking + biometric reveal/copy,
+  card-type detection, the cleartext last-4/type display hint for the Payment row. Then the vault UI is
+  complete.
+- **TV-3 pairs with Slice 10 as the autofill block**, sharing the `SurfrCore` extraction
+  (`LoginPayload` / PSL / matcher relocation).
 - Lands **after Slice 9 commits**. Recommended before Slice 10 (it fixes real imported-data handling
   every LastPass user hits and is not Apple-gated), unless you'd rather finish the password story
   (Slice 10) first.

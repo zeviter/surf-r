@@ -11,7 +11,7 @@ final class VaultNavTests: XCTestCase {
         XCTAssertTrue(nav.atRoot)
 
         nav.push(.detail(UUID()))
-        nav.push(.edit(UUID()))
+        nav.push(.editLogin(UUID()))
         XCTAssertTrue(nav.pop())                       // edit → detail
         if case .detail = nav.current {} else { XCTFail("expected detail after popping edit") }
         XCTAssertTrue(nav.pop())                       // detail → list (root)
@@ -23,10 +23,23 @@ final class VaultNavTests: XCTestCase {
     func test_itemOpenedFromSecurityCheck_returnsToSecurityCheck() {
         var nav = VaultNav()
         nav.push(.securityCheck)
-        nav.push(.edit(UUID()))                        // open a weak item's editor from Security Check
+        nav.push(.editLogin(UUID()))                   // open a weak item's editor from Security Check
         XCTAssertTrue(nav.pop())
         XCTAssertEqual(nav.current, .securityCheck)     // back lands on Security Check, not the list
         XCTAssertTrue(nav.pop())
+        XCTAssertTrue(nav.atRoot)
+    }
+
+    /// A note opened from the Notes segment returns to the list (one level), and its editor pops to the
+    /// note detail — origin/stack threading is type-agnostic.
+    func test_typedScreens_popOneLevel() {
+        var nav = VaultNav()
+        let id = UUID()
+        nav.push(.detail(id))
+        nav.push(.editAddress(id))
+        XCTAssertTrue(nav.pop())                        // editAddress → detail
+        XCTAssertEqual(nav.current, .detail(id))
+        XCTAssertTrue(nav.pop())                        // detail → list
         XCTAssertTrue(nav.atRoot)
     }
 
@@ -34,7 +47,7 @@ final class VaultNavTests: XCTestCase {
         var nav = VaultNav()
         let id = UUID()
         nav.push(.detail(id));        XCTAssertEqual(nav.openItemID, id)
-        nav.push(.edit(id));          XCTAssertEqual(nav.openItemID, id)
+        nav.push(.editNote(id));      XCTAssertEqual(nav.openItemID, id)
         nav.reset();                  XCTAssertNil(nav.openItemID)
         nav.push(.securityCheck);     XCTAssertNil(nav.openItemID)   // not an item screen
     }
