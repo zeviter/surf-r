@@ -13,7 +13,7 @@ final class TypedVaultTests: XCTestCase {
 
     private let creditCardBody = """
     NoteType:Credit Card
-    Name on Card:zeviter Jose
+    Name on Card:Jane Doe
     Type:Visa
     Number:4111 1111 1111 1111
     Security Code:123
@@ -25,7 +25,7 @@ final class TypedVaultTests: XCTestCase {
     private let ukAddressBody = """
     NoteType:Address
     Title:Mr.
-    First Name:zeviter
+    First Name:Jane
     Last Name:Jose
     Company:Surfr Ltd
     Address 1:221B Baker Street
@@ -35,7 +35,7 @@ final class TypedVaultTests: XCTestCase {
     State:
     Zip / Postal Code:NW1 6XE
     Country:United Kingdom
-    Email Address:zeviter@example.com
+    Email Address:jane@example.com
     Phone:{"num":"+44 20 7946 0958","cc3l":"GBR","ext":""}
     Gender:Male
     """
@@ -73,7 +73,7 @@ final class TypedVaultTests: XCTestCase {
         guard case .payment(let p) = TypedNoteParser.classify(title: "Premier Card", body: creditCardBody)
         else { return XCTFail() }
         XCTAssertEqual(p.nickname, "Premier Card")             // from the title
-        XCTAssertEqual(p.cardholderName, "zeviter Jose")
+        XCTAssertEqual(p.cardholderName, "Jane Doe")
         XCTAssertEqual(p.cardType, "Visa")
         XCTAssertEqual(p.number, "4111 1111 1111 1111")
         XCTAssertEqual(p.cvv, "123")
@@ -94,7 +94,7 @@ final class TypedVaultTests: XCTestCase {
         guard case .address(let a) = TypedNoteParser.classify(title: "Home", body: ukAddressBody)
         else { return XCTFail() }
         XCTAssertEqual(a.label, "Home")
-        XCTAssertEqual(a.firstName, "zeviter")
+        XCTAssertEqual(a.firstName, "Jane")
         XCTAssertEqual(a.lastName, "Jose")
         XCTAssertEqual(a.company, "Surfr Ltd")
         XCTAssertEqual(a.line1, "221B Baker Street")
@@ -102,7 +102,7 @@ final class TypedVaultTests: XCTestCase {
         XCTAssertEqual(a.city, "London")
         XCTAssertEqual(a.postalCode, "NW1 6XE")
         XCTAssertEqual(a.country, "United Kingdom")
-        XCTAssertEqual(a.email, "zeviter@example.com")
+        XCTAssertEqual(a.email, "jane@example.com")
     }
 
     // MARK: county vs stateProvince — separate, independently nullable

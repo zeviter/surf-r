@@ -70,9 +70,9 @@ decrypted note body's first line.
 │ ▣  │  └──────────────┴───────┴────────────┴──────────┘           │   ▣ = vault (green, active)
 │ ▢  │  ⌕ Search titles…                                            │
 │ ▢  │  ┌───────────────────────────────────────────────┐          │
-│    │  │ [G]  github.com        zeviter@…       [STRONG]  │          │
-│    │  │ [f]  figma.com         zeviter@…       [REUSED]  │          │
-│    │  │ [b]  bank.example      zeviter · 2FA   [ TOTP ]  │          │
+│    │  │ [G]  github.com        jane@…       [STRONG]  │          │
+│    │  │ [f]  figma.com         jane@…       [REUSED]  │          │
+│    │  │ [b]  bank.example      jane · 2FA   [ TOTP ]  │          │
 │    │  └───────────────────────────────────────────────┘          │
 └────┴─────────────────────────────────────────────────────────────┘
 ```
@@ -179,13 +179,13 @@ text field.*
 ```
 ┌────┬──────────────────────────────────────────────┐
 │ ▢  │  📍  Home                   Edit   Delete…    │
-│ ▣  │  NAME              zeviter [last]        copy   │
+│ ▣  │  NAME              Jane [last]        copy   │
 │    │  ADDRESS LINE 1    [line 1]            copy   │
 │    │  CITY / DISTRICT   London              copy   │
 │    │  COUNTY (UK,opt)   Greater London      copy   │
 │    │  POSTAL CODE       XX# #XX             copy   │
 │    │  COUNTRY           United Kingdom      copy   │
-│    │  EMAIL             zeviter@example.com   copy   │
+│    │  EMAIL             jane@example.com   copy   │
 └────┴──────────────────────────────────────────────┘
 ```
 *WF-16 · Discrete structured fields mapped from the LastPass Address note — each fillable separately.
@@ -216,7 +216,7 @@ Per-field copy. Empty fields omitted in detail (a UK address shows County, not S
 ```
 ┌────┬──────────────────────────────────────────────┐
 │ ▢  │  💳  Premier Debit          Edit   Delete…    │
-│ ▣  │  CARDHOLDER     zeviter [last]           copy   │
+│ ▣  │  CARDHOLDER     Jane [last]           copy   │
 │    │  CARD NUMBER    ••••  ••••  ••••  1234  reveal·copy │
 │    │  SECURITY CODE  •••                    reveal·copy │
 │    │  EXPIRY         06 / 28   · valid from 06/23  │

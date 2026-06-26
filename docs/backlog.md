@@ -167,7 +167,7 @@
   attention" path. Reused renders as **clusters** ("N logins share a password"; value never shown).
   Vault nav is a **stack** (Back/ESC pop one level; item-from-Security-Check returns to it; ESC clears
   search first). Pure `AuditEngine` + `VaultNav` in the app + `SecurityCheckView`; WF-4 list badges
-  render from cached flags/tokens with no decryption. Hardware-verified by zeviter (real migrated vault).
+  render from cached flags/tokens with no decryption. hardware-verified (real migrated vault).
 - ✓ **F5 password vault — Slices 1–8e** (`docs/vault-spec.md` §11). Argon2id/CryptoKit envelope crypto
   (`SurfrCore`), GRDB store + lock state machine, master-password unlock + mandatory Recovery Kit,
   Secure-Enclave biometric unlock, list/detail/add-edit, CSV import (LastPass/Bitwarden/Chrome/Safari),

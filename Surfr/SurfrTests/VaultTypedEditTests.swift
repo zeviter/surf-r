@@ -48,7 +48,7 @@ final class VaultTypedEditTests: XCTestCase {
 
     func test_address_saveAndReload_discreteFields_countyVsState() async throws {
         let gate = await unlockedGate()
-        let addr = AddressPayload(label: "Home", firstName: "zeviter", lastName: "Jose",
+        let addr = AddressPayload(label: "Home", firstName: "Jane", lastName: "Jose",
                                   line1: "221B Baker Street", city: "London",
                                   county: "Greater London", stateProvince: nil,
                                   postalCode: "NW1 6XE", country: "United Kingdom",

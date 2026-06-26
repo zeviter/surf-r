@@ -34,7 +34,7 @@ final class VaultTypedReclassifyTests: XCTestCase {
 
     private let cardBody = """
     NoteType:Credit Card
-    Name on Card:zeviter Jose
+    Name on Card:Jane Doe
     Type:Visa
     Number:4111 1111 1111 1111
     Security Code:737
@@ -42,7 +42,7 @@ final class VaultTypedReclassifyTests: XCTestCase {
     """
     private let addressBody = """
     NoteType:Address
-    First Name:zeviter
+    First Name:Jane
     Address 1:221B Baker Street
     City / Town:London
     County:Greater London
@@ -76,7 +76,7 @@ final class VaultTypedReclassifyTests: XCTestCase {
         // Card → payment, with structured fields; the body-derived sensitive fields decode back.
         XCTAssertEqual(item(gate, "Premier Card")?.type, VaultItemType.payment)
         let card = gate.decryptPayment(item(gate, "Premier Card")!)
-        XCTAssertEqual(card?.cardholderName, "zeviter Jose")
+        XCTAssertEqual(card?.cardholderName, "Jane Doe")
         XCTAssertEqual(card?.number, "4111 1111 1111 1111")
         XCTAssertEqual(card?.cvv, "737")
         XCTAssertEqual(card?.cardType, "Visa")
