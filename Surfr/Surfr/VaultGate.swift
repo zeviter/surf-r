@@ -235,6 +235,7 @@ final class VaultGate: ObservableObject {
             phase = .unlocked
             await loadItems()
             await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
+            await backfillPaymentHints()           // TV-2b: derive cleartext last-4/network for cards
             return true
         } catch {
             lastError = "Incorrect master password."
@@ -260,6 +261,7 @@ final class VaultGate: ObservableObject {
             phase = .unlocked
             await loadItems()
             await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
+            await backfillPaymentHints()           // TV-2b: derive cleartext last-4/network for cards
             return true
         } catch {
             lastError = "Recovery code not recognized."
@@ -470,11 +472,12 @@ final class VaultGate: ObservableObject {
         await loadItems()
     }
 
-    /// Create (id == nil) or update a **non-login typed** item (secure note / address): encrypt the
-    /// already-encoded typed payload under a fresh per-item key, set its `type`, and refresh. Non-login
-    /// items carry **no** health flags and are **not** audited. (Payment editing is TV-2b.)
+    /// Create (id == nil) or update a **non-login typed** item (secure note / address / payment): encrypt
+    /// the already-encoded typed payload under a fresh per-item key, set its `type` + optional cleartext
+    /// payment hint (last-4 + network), and refresh. Non-login items carry **no** health flags and are
+    /// **not** audited.
     func saveTypedItem(id: UUID?, type: String, title: String, payloadData: Data,
-                       hosts: [SurfrCore.Host]) async {
+                       hosts: [SurfrCore.Host], last4: String? = nil, cardNetwork: String? = nil) async {
         guard let store, phase == .unlocked else { return }
         do {
             var data = payloadData
@@ -484,12 +487,49 @@ final class VaultGate: ObservableObject {
             let now = self.now()
             let item = StoredItem(id: id ?? UUID(), type: type, title: title,
                                   createdAt: existing?.createdAt ?? now, modifiedAt: now,
-                                  sealed: sealed, hosts: hosts, healthFlags: 0)
+                                  sealed: sealed, hosts: hosts, healthFlags: 0,
+                                  last4: last4, cardNetwork: cardNetwork)
             try await store.upsert(item)
             await loadItems()
         } catch {
             lastError = "Could not save the item."
         }
+    }
+
+    // MARK: - Payment (TV-2b)
+
+    /// Derived, non-secret cleartext hint for the Payment list row: last-4 of the PAN + detected network
+    /// (`nil` network for an unrecognised prefix). The full number + CVV stay encrypted-payload-only.
+    static func paymentHint(forNumber number: String) -> (last4: String, network: String?) {
+        let last4 = CardDetection.last4(number)
+        let net = CardDetection.network(number)
+        return (last4, net == .unknown ? nil : net.rawValue)
+    }
+
+    /// Create/update a payment item: re-derive its cleartext last-4/network hint from the entered number
+    /// and store it alongside the encrypted `PaymentPayload`.
+    func savePayment(id: UUID?, title: String, payload: PaymentPayload) async {
+        guard let data = try? payload.encoded() else { lastError = "Could not save the card."; return }
+        let hint = Self.paymentHint(forNumber: payload.number)
+        await saveTypedItem(id: id, type: VaultItemType.payment, title: title,
+                            payloadData: data, hosts: [], last4: hint.last4, cardNetwork: hint.network)
+    }
+
+    /// One-time, idempotent backfill of the cleartext hint for already-migrated payment items (those
+    /// created by the TV-1 secureNote→payment re-classification, which had no hint). Walks ONLY payment
+    /// items whose `last4` is still nil — decrypt one at a time → derive last-4/network → store the hint
+    /// → zero plaintext. Naturally guarded (once `last4` is set, the item is skipped), so a re-run is a
+    /// no-op and new cards (saved with a hint already) are never touched.
+    func backfillPaymentHints() async {
+        guard let store, phase == .unlocked else { return }
+        var changed = false
+        for item in items where item.type == VaultItemType.payment && item.last4 == nil {
+            guard let payload = decryptPayment(item) else { continue }
+            let hint = Self.paymentHint(forNumber: payload.number)
+            try? await store.setPaymentHint(last4: hint.last4, cardNetwork: hint.network, forItemID: item.id)
+            changed = true
+        }
+        if changed { items = (try? await store.allItems()) ?? items }
     }
 
     // MARK: - Security check (Slice 9 / WF-9) — keyed-token, zero-decryption audit + junk-host hygiene
@@ -636,7 +676,8 @@ final class VaultGate: ObservableObject {
             case VaultItemType.payment:
                 let p = decryptPayment(item)
                 let last4 = p.map { String($0.number.filter(\.isNumber).suffix(4)) } ?? "?"
-                print("[TypedVault] payment ‘\(item.title)’ cardholder=\(s(p?.cardholderName)) type=\(p?.cardType ?? "?") number=••••\(last4) cvv=\(s(p?.cvv)) expiry=\(s(p?.expiry))")
+                // Also show the CLEARTEXT hint (item.last4/cardNetwork) — what the list row reads.
+                print("[TypedVault] payment ‘\(item.title)’ cardholder=\(s(p?.cardholderName)) network=\(item.cardNetwork ?? "—") number=••••\(last4) cvv=\(s(p?.cvv)) expiry=\(s(p?.expiry)) hint=••••\(item.last4 ?? "nil")")
             case VaultItemType.address:
                 let a = decryptAddress(item)
                 print("[TypedVault] address ‘\(item.title)’ name=\(s(a?.firstName ?? a?.lastName)) line1=\(s(a?.line1)) city=\(s(a?.city)) county=\(s(a?.county)) state=\(s(a?.stateProvince)) postal=\(s(a?.postalCode)) phone=\(s(a?.phone)) email=\(s(a?.email))")
@@ -747,6 +788,7 @@ final class VaultGate: ObservableObject {
             try await store.upsertMany(toStore)   // atomic — all or nothing
             await loadItems()
             await reclassifyTypedItems()          // TV-1: refine freshly-imported notes → payment/address
+            await backfillPaymentHints()          // TV-2b: cleartext last-4/network for new cards
             await runSecurityCheck()              // key + flag the freshly imported items (backfill)
             vaultLog("import: \(toStore.count) added, \(skippedDuplicates) exact-duplicate(s) skipped")
             return ImportSummary(imported: toStore.count, skippedDuplicates: skippedDuplicates, failed: false)
@@ -948,6 +990,7 @@ final class VaultGate: ObservableObject {
             phase = .unlocked
             await loadItems()
             await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
+            await backfillPaymentHints()           // TV-2b: derive cleartext last-4/network for cards
             vaultLog("biometric unlock succeeded")
             return true
         } catch BiometricFailure.userCancelled {

@@ -132,13 +132,19 @@ public enum TypedNoteParser {
     // MARK: Field mapping (real LastPass labels)
 
     private static func parsePayment(title: String, body: String, fields: [String: String]) -> PaymentPayload {
-        PaymentPayload(
+        // Normalize LastPass month NAMES / variants → canonical MM/YYYY (e.g. "June, 2023" → "06/2023");
+        // an unparseable value is kept raw so it's flagged (not lost).
+        func canonOrRaw(_ raw: String) -> String {
+            let canon = CardValidation.canonicalMonthYear(raw)
+            return canon.isEmpty ? raw : canon
+        }
+        return PaymentPayload(
             nickname:       title,
             cardholderName: fields["name on card"] ?? "",
             number:         fields["number"] ?? "",
             cardType:       fields["type"] ?? "",
-            expiry:         fields["expiration date"] ?? "",
-            startDate:      fields["start date"] ?? "",
+            expiry:         canonOrRaw(fields["expiration date"] ?? ""),
+            startDate:      canonOrRaw(fields["start date"] ?? ""),
             cvv:            fields["security code"] ?? "",
             notes:          fields["notes"] ?? "",
             rawBody:        body

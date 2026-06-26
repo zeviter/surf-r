@@ -26,20 +26,25 @@
 - ◐ **Typed vault — Secure Notes / Addresses / Payment Methods** (`docs/typed-vault-wireframes.md`,
   WF-11+). **TV-1 done** (data model + LastPass `NoteType` parsing + one-time re-classification).
   **TV-2a done** — segmented vault list (WF-12) + type picker (WF-13, Payment disabled) + Secure Note &
-  Address detail/edit/copy (WF-15/16) + nav inheritance (WF-19). Typed rows are **glyph + title** (the
-  "Name · City" / "•••• last4" secondaries need a §10 cleartext display-hint, deferred to TV-2b — drawing
-  them now would either decrypt on list-draw or grow cleartext metadata). **TV-2b next** — Payment detail/
-  edit (WF-17): card-number/CVV masking + biometric reveal + card-type detection + the cleartext last-4
-  Payment-row hint. **TV-3** — card/address click-to-fill (WF-18); **pairs with Slice 10**, sharing the
-  `SurfrCore` extraction.
+  Address detail/edit/copy (WF-15/16) + nav inheritance (WF-19). **TV-2b done** — Payment detail/edit
+  (WF-17): masked card-number/CVV with **biometric reveal/copy** (the Slice-5 path), local **prefix
+  card-network detection**, and a **cleartext last-4/network hint** (derived at save + backfilled once for
+  migrated cards) so the Payment row renders `network · •••• last4` with **no decryption**; picker Payment
+  option enabled. All four current types now have full views. **TV-2-VAL done** — vault-wide **soft**
+  field validation + structured inputs (payment expiry/valid-from month+year pickers, read-only prefix
+  network, digit-grouped card number with soft Luhn, digit CVV; address **country picker**): GUIDES +
+  WARNS in amber, **never blocks save**, existing malformed imports stay openable/editable (pure
+  `CardValidation` / `FieldCheck` in `SurfrCore`). **TV-2c** (optional) — first-class Bank Account
+  (validation pre-shape recorded in the wireframes spec), else long-tail items stay generic Secure Notes.
+  **TV-3** — card/address click-to-fill (WF-18); **pairs with Slice 10**, sharing the `SurfrCore` extraction.
   - ☐ **(post-v1) First-class long-tail editors** (Passport / Bank Account / Wi-Fi / SSH Key / SSN …):
     v1 keeps them as generic Secure Notes with the raw body preserved verbatim; structured editors deferred.
   - ☐ **(post-v1) "Convert type" flow** (e.g. note → payment): v1 is create-as-type only; a mis-imported
     item is fixed by re-creating it.
-  - **Interim (now PAYMENT-only, until TV-2b):** addresses + notes have real views as of TV-2a; only
-    **payment** items show the honest interim placeholder ("Card details — full view coming in the next
-    update") — **not** a decryption-failure message (the payload decodes fine; a real decode failure
-    still shows the true error). List rendering + audit + autofill unaffected.
+  - **Interim placeholder:** as of TV-2b every current type (login/note/address/payment) has a full
+    detail view; the generic `TypedInterimView` is now **defensive only** — it covers a *future*
+    first-class type (e.g. Bank Account, TV-2c) until that type's view ships. It is an honest "full view
+    coming" message, never a decryption-failure message.
 - ☐ **2FA Directory snapshot goes stale (vault Slice 9 upkeep).** The bundled
   `SurfrCore/.../twofa_totp_domains.json` (TOTP-supporting registrable domains, MIT, dated 2026-06-24)
   has **no runtime refresh by design** — re-snapshot from the 2fa.directory v4 API and re-bundle on a

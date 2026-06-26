@@ -85,7 +85,7 @@ rail stays a single key glyph (green = active surface). Login rows unchanged fro
 | Passwords | favicon tile + title(host) + username | health badge (green STRONG / amber WEAK·REUSED / blue TOTP) |
 | Notes | note glyph + title + 1-line snippet (title only if body sensitive) | — |
 | Addresses | pin glyph + label | fill-available hint (TV-3) |
-| Payment | card glyph + nickname (TV-2a) → + network glyph + "•••• last4" (TV-2b) | fill-available hint (TV-3) |
+| Payment | card glyph + nickname + "network · •••• last4" (via the cleartext last-4/network hint — no decrypt) | fill-available hint (TV-3) |
 
 **Build rules — WF-12**
 - Single surface, single rail icon. Segmented control sits in the `PageScaffold` header, above the
@@ -99,10 +99,10 @@ rail stays a single key glyph (green = active surface). Login rows unchanged fro
 - Reuse the existing favicon tile, badge vocabulary, active states. Address/Payment rows use generic
   glyphs (no favicon).
 - **Row secondaries vs. the zero-decryption invariant (§10).** A row is drawn from **cleartext
-  metadata only** — never a payload decrypt. So Address rows are **label-only** (`Name`/`City` are
-  encrypted-payload, not §10-sanctioned cleartext) and TV-2a Payment rows are **nickname-only**. The
-  `•••• last4` + network glyph (the §10-sanctioned cleartext last-4/type) land in **TV-2b**, where a
-  small cleartext display-hint is added alongside the payment view.
+  metadata only** — never a payload decrypt. Address rows are **label-only** (`Name`/`City` are
+  encrypted-payload, not §10-sanctioned cleartext). **Payment rows show `network · •••• last4`** via the
+  TV-2b **cleartext last-4/network hint** columns (derived, non-secret — the full PAN + CVV stay
+  encrypted-payload-only), so the row still draws with **no decryption**.
 - **Segmented control (as-built).** A **custom** control (not the native segmented control), tracking the
   **system accent** (`Color.accentColor`, never a hardcoded blue) so it matches the OS + the rest of the
   app's chrome. A rounded neutral container with quiet dividers; each segment is a title + a count pill to
@@ -202,6 +202,10 @@ Per-field copy. Empty fields omitted in detail (a UK address shows County, not S
 - All field values are encrypted-payload; per-field copy (concealed clipboard). **Not** in any
   cleartext-searchable column — only the label/title is searchable.
 - Store values as entered — no auto-formatting of postcode/phone.
+- **TV-2-VAL: country is a PICKER** (ISO country list), not free text; an imported value that doesn't
+  match a known country is shown **flagged but still selectable/keepable** (soft, never blocks). Postcode
+  + phone stay free text (UK/intl formats vary — **not** hard-validated); the TV-2a empty-phone-JSON
+  heal still applies (no raw `{…}` shown). Names/company/lines/city/county/state are free text.
 - Click-to-fill into web address forms = TV-3; discrete fields are what make a clean per-field mapping
   possible (see WF-18). Storage/display/edit/copy here do not depend on TV-3.
 
@@ -231,6 +235,19 @@ treatment. List shows only "•••• last4". Card type auto-detected from th
 - Excluded from the security audit (type ≠ login) — this is the fix for "weak password on a credit
   card".
 - Click-to-fill into web payment forms = TV-3.
+  > **TV-2b as-built.** Card number + CVV are masked (number shows `•••• •••• •••• last4` from the
+  > cleartext hint; CVV `•••`); **reveal AND copy of both are biometric-gated** via the exact Slice-5
+  > reveal path (`biometricAuthenticateForReveal` + master fallback; honours "Require auth to
+  > reveal/copy/fill"), and the revealed plaintext is zeroed on close. Non-sensitive fields show plainly
+  > with concealed-clipboard per-field copy; empty fields omitted. The **network glyph comes from local
+  > prefix detection** (`CardDetection.network`, IIN ranges, no network) — **not** the LastPass `cardType`
+  > product string, which is kept only as a "Card type" label. The cleartext **last-4 + network hint**
+  > (`items.last4` / `card_network`) is derived at save and **backfilled once** for migrated cards
+  > (one-at-a-time decrypt→derive→store→zero), and is the only thing the Payment list row reads.
+  > **TV-2-VAL structured inputs (as-built).** Expiry + valid-from are **month + year pickers** (store
+  > `MM/YYYY`; an unparseable import leaves them unset + flagged). Card type/network is **read-only
+  > prefix detection** — no free-text card-type box. Card number is **digits-only, auto-grouped in 4s**
+  > with a **soft Luhn warn**; CVV is **digits-only, 3–4**. All soft — saving junk still succeeds.
 
 ---
 
@@ -331,6 +348,15 @@ list (origin threaded through, same family as the Slice-5 surface-restore fixes)
   to a login form. (Click-to-fill for cards/addresses is the separate TV-3 path.)
 - **No network, no auto-fill.** Card-type detection is local (number prefix). Filling is always
   click-initiated and auth-gated.
+- **Validation GUIDES + WARNS, never BLOCKS (TV-2-VAL).** Field validation is **soft**: an invalid value
+  is flagged **amber** (the ⚠ vocabulary, never red) with a short hint on both detail + edit, and a
+  save-with-flags shows a quiet **dismissible** "saved anyway" notice. **Save always succeeds** — no
+  disabled save button, no required-field trap — so an existing malformed import (e.g. card number
+  `jkjf…`, expiry `ofdsfds`) always **opens and edits** to be fixed. Empty fields are never nagged.
+  Where a value is constrained, a **structured control** (month/year picker, network from prefix
+  detection, country picker, digit-only entry) prevents new garbage at the source. Validators are pure
+  `SurfrCore` functions (`CardValidation`, `FieldCheck`); they run only in detail/edit (already
+  decrypted) and **never** touch the zero-decryption list.
 
 ---
 
@@ -343,7 +369,16 @@ detection**. TV-3 is the heavy, deferrable web-fill piece.
 |----|----|----|
 | **TV-1** | Data model + type classification + LastPass `NoteType` parsing (payment/address field extraction; everything else → note with raw body). Headless, unit-tested against the real export samples. Re-classify the `secureNote`-marked items from the Slice-9 closeout. | low–med |
 | **TV-2a** ✅ | Segmented vault list (WF-12) + type picker (WF-13, Payment disabled) + Secure Note & Address detail/edit/copy (WF-15/16) + uniform ESC/back nav (WF-19). No payment detail/edit, no web fill. Typed rows are glyph + title (see As-built note). | med |
-| **TV-2b** | Payment Method detail/edit (WF-17): card-number/CVV masking + biometric reveal/copy (the password reveal path), card-type detection, the cleartext last-4/type Payment-row hint. Replaces the payment interim placeholder. | med |
+| **TV-2b** ✅ | Payment Method detail/edit (WF-17): card-number/CVV masking + biometric reveal/copy (the Slice-5 reveal path), local prefix card-network detection, cleartext last-4/network hint (derived + backfilled) for zero-decryption Payment rows, picker Payment option enabled. | med |
+| **TV-2c** | Bank Account (+ any other first-class long-tail type) detail/edit; otherwise long-tail items stay generic Secure Notes. The generic interim placeholder covers a first-class type until its view ships. | med |
+
+**Bank Account validation pre-shape (record now; build in TV-2c).** When the Bank Account surface is
+built, apply the **same never-block soft-validation rule** (§10) with these constrained inputs:
+**Sort code** → 6 digits, soft, displayed `XX-XX-XX`; **Account number** → 8 digits (soft); **SWIFT/BIC**
+→ 8 or 11 alphanumeric (soft); **IBAN** → soft length/format warn (no hard validation — country formats
+vary); **PIN** → digits, **sensitive/masked** (biometric reveal, like CVV); **Account type** → picker.
+Free-form: account nickname, holder name, notes. Validators land as pure `SurfrCore` functions alongside
+`CardValidation`. No code now — spec note only.
 | **TV-3** | Click-to-fill for cards/addresses (WF-18): card/address web-form field detection in the isolated world + per-field overlay icon + multi-choice picker. **Pairs with Slice 10 as the autofill block** (shared `SurfrCore` extraction); deferrable without blocking TV-1/TV-2. | med–high |
 
 **Sequencing**
@@ -355,9 +390,10 @@ detection**. TV-3 is the heavy, deferrable web-fill piece.
     either a payload decrypt on list draw (violates §10) or a §10-sanctioned **cleartext last-4/type
     display hint** (a small storage addition). That hint lands with **TV-2b** (payment), where last-4 is
     needed anyway. Address rows stay label-only (city is not §10-sanctioned cleartext).
-- **TV-2b next** — Payment Method detail/edit (WF-17): card-number/CVV masking + biometric reveal/copy,
-  card-type detection, the cleartext last-4/type display hint for the Payment row. Then the vault UI is
-  complete.
+- **TV-2b done** — Payment Method detail/edit (WF-17): masked card-number/CVV with biometric reveal/copy
+  (Slice-5 path), prefix card-network detection, and the cleartext last-4/network hint for zero-decryption
+  Payment rows. All four current types (login/note/address/payment) now have full views.
+- **TV-2c** (optional) — first-class Bank Account (else it stays a generic Secure Note).
 - **TV-3 pairs with Slice 10 as the autofill block**, sharing the `SurfrCore` extraction
   (`LoginPayload` / PSL / matcher relocation).
 - Lands **after Slice 9 commits**. Recommended before Slice 10 (it fixes real imported-data handling

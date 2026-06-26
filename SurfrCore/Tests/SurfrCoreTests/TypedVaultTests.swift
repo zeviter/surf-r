@@ -77,10 +77,17 @@ final class TypedVaultTests: XCTestCase {
         XCTAssertEqual(p.cardType, "Visa")
         XCTAssertEqual(p.number, "4111 1111 1111 1111")
         XCTAssertEqual(p.cvv, "123")
-        XCTAssertEqual(p.expiry, "June,2028")
+        XCTAssertEqual(p.expiry, "06/2028")                    // "June,2028" normalized to canonical MM/YYYY
         XCTAssertEqual(p.startDate, "")
         XCTAssertEqual(p.notes, "travel card")
         XCTAssertEqual(p.rawBody, creditCardBody)              // lossless
+    }
+
+    func test_payment_expiry_normalizedToCanonical_orKeptRawIfUnparseable() {
+        let body = "NoteType:Credit Card\nNumber:4111 1111 1111 1111\nExpiration Date:June-2023\nStart Date:ofdsfds"
+        guard case .payment(let p) = TypedNoteParser.classify(title: "X", body: body) else { return XCTFail() }
+        XCTAssertEqual(p.expiry, "06/2023")     // month name → canonical
+        XCTAssertEqual(p.startDate, "ofdsfds")  // unparseable → kept raw (flagged, not lost)
     }
 
     func test_address_extractsEveryField_discrete() {

@@ -39,6 +39,12 @@ public struct StoredItem: Equatable, Sendable, Identifiable {
     public var sealed: SealedItem      // wrappedItemKey + ciphertext (GCM .combined), from VaultCrypto
     public var hosts: [Host]           // cleartext metadata
     public var healthFlags: Int        // bitmask; populated in Slice 9
+    /// **Payment cleartext hints** (TV-2b): the last-4 of the PAN and the detected `card_network`. These
+    /// are derived, non-secret display hints (not the full number, not the CVV) that let the Payment list
+    /// row render "•••• 1234 + glyph" with **no decryption**. `nil` until derived/backfilled; non-payment
+    /// items leave them `nil`. Disclosed in vault-spec §13.
+    public var last4: String?
+    public var cardNetwork: String?
 
     public init(id: UUID = UUID(),
                 type: String = "login",
@@ -47,7 +53,9 @@ public struct StoredItem: Equatable, Sendable, Identifiable {
                 modifiedAt: Date,
                 sealed: SealedItem,
                 hosts: [Host] = [],
-                healthFlags: Int = 0) {
+                healthFlags: Int = 0,
+                last4: String? = nil,
+                cardNetwork: String? = nil) {
         self.id = id
         self.type = type
         self.title = title
@@ -56,6 +64,8 @@ public struct StoredItem: Equatable, Sendable, Identifiable {
         self.sealed = sealed
         self.hosts = hosts
         self.healthFlags = healthFlags
+        self.last4 = last4
+        self.cardNetwork = cardNetwork
     }
 
     /// Only login items are autofilled + audited (vault-spec §7/§10). Non-login items (e.g. imported
@@ -265,6 +275,15 @@ public final class VaultStore: Sendable {
         }
     }
 
+    /// Set a payment item's cleartext hint (last-4 + network) without re-encrypting the payload — used
+    /// by the one-time backfill of already-migrated cards. Derived, non-secret (TV-2b).
+    public func setPaymentHint(last4: String?, cardNetwork: String?, forItemID id: UUID) async throws {
+        try await dbQueue.write { db in
+            try db.execute(sql: "UPDATE items SET last4 = ?, card_network = ? WHERE id = ?",
+                           arguments: [last4, cardNetwork, id.uuidString])
+        }
+    }
+
     /// Drop every reuse token (without touching `health_flags`). Used when the persisted audit-key
     /// self-check no longer matches — the cache is rebuilt from scratch under the live key.
     public func clearAuditTokens() async throws {
@@ -311,7 +330,9 @@ public final class VaultStore: Sendable {
             modifiedAt: row.modifiedAt,
             sealed: SealedItem(wrappedItemKey: row.wrappedItemKey, ciphertext: row.ciphertext),
             hosts: hostRows.map { Host(host: $0.host, isPrimary: $0.isPrimary) },
-            healthFlags: row.healthFlags
+            healthFlags: row.healthFlags,
+            last4: row.last4,
+            cardNetwork: row.cardNetwork
         )
     }
 
@@ -390,6 +411,15 @@ public final class VaultStore: Sendable {
                 t.check(sql: "id = 1")                             // singleton
                 t.column("key_check", .blob).notNull()             // HMAC(audit_key, fixed sentinel)
                 t.column("checked_at", .datetime).notNull()
+            }
+        }
+        // TV-2b — payment list-row cleartext hints. Derived, non-secret (last-4 of the PAN + detected
+        // network); the full number + CVV stay encrypted-payload-only. Lets the Payment row render
+        // "•••• 1234 + glyph" without decrypting (zero-decryption-list invariant). Disclosed in §13.
+        migrator.registerMigration("v3_payment_hint") { db in
+            try db.alter(table: "items") { t in
+                t.add(column: "last4", .text)            // 4 digits; nil = not yet derived
+                t.add(column: "card_network", .text)     // CardNetwork raw value
             }
         }
         return migrator
@@ -475,13 +505,16 @@ private struct ItemRow: Codable, FetchableRecord, PersistableRecord {
     var wrappedItemKey: Data
     var ciphertext: Data
     var healthFlags: Int
+    var last4: String?
+    var cardNetwork: String?
 
     enum CodingKeys: String, CodingKey {
-        case id, type, title, ciphertext
+        case id, type, title, ciphertext, last4
         case createdAt = "created_at"
         case modifiedAt = "modified_at"
         case wrappedItemKey = "wrapped_item_key"
         case healthFlags = "health_flags"
+        case cardNetwork = "card_network"
     }
 
     init(_ item: StoredItem) {
@@ -493,6 +526,8 @@ private struct ItemRow: Codable, FetchableRecord, PersistableRecord {
         wrappedItemKey = item.sealed.wrappedItemKey
         ciphertext = item.sealed.ciphertext
         healthFlags = item.healthFlags
+        last4 = item.last4
+        cardNetwork = item.cardNetwork
     }
 }
 

@@ -233,7 +233,8 @@ struct AddressDetailView: View {
                     field("County", a.county ?? "")
                     field("State / Province", a.stateProvince ?? "")
                     field("Postal code", a.postalCode)
-                    field("Country", a.country)
+                    field("Country", a.country,
+                          check: CountryList.isRecognised(a.country) ? .ok : .suspect("not a recognised country"))
                     field("Phone", a.phone)
                     field("Email", a.email)
                 }
@@ -258,8 +259,9 @@ struct AddressDetailView: View {
         }
     }
 
-    /// Render a labelled field only when it has a value (empty fields omitted in detail).
-    @ViewBuilder private func field(_ label: String, _ value: String) -> some View {
+    /// Render a labelled field only when it has a value (empty fields omitted in detail). A `.suspect`
+    /// check flags it amber + a hint (soft).
+    @ViewBuilder private func field(_ label: String, _ value: String, check: FieldCheck = .ok) -> some View {
         if !value.isEmpty {
             VStack(alignment: .leading, spacing: 5) {
                 detailFieldLabel(label)
@@ -270,6 +272,8 @@ struct AddressDetailView: View {
                         .buttonStyle(.plain).help("Copy \(label.lowercased())")
                 }
                 .padding(10).background(RoundedRectangle(cornerRadius: 6).fill(Color.gray.opacity(0.08)))
+                .suspectBorder(check.isSuspect)
+                ValidationHint(check: check)
             }
             .vaultFieldRow()
         }
@@ -302,8 +306,10 @@ struct AddressEditView: View {
     @State private var rawBody = ""
     @State private var phoneCountry: String?
     @State private var loaded = false
+    @State private var savedWarning = false
 
     private var isNew: Bool { existing == nil }
+    private var countryRecognised: Bool { CountryList.isRecognised(country) }
 
     var body: some View {
         ScrollView {
@@ -317,16 +323,18 @@ struct AddressEditView: View {
                 field("Address line 2", $line2)
                 field("City / District", $city)
                 HStack(spacing: 10) { field("County", $county); field("State / Province", $stateProvince) }
-                HStack(spacing: 10) { field("Postal code", $postalCode); field("Country", $country) }
+                HStack(alignment: .top, spacing: 10) { field("Postal code", $postalCode); countryPicker }
                 field("Phone", $phone)
                 field("Email", $email)
+
+                if savedWarning { SavedAnywayBanner(onDone: onDone).padding(.vertical, 6) }
 
                 HStack {
                     Button("Cancel", action: onDone).keyboardShortcut(.cancelAction)
                     Spacer()
+                    // NEVER disabled — save always succeeds (the load-bearing TV-2-VAL rule).
                     Button(isNew ? "Add" : "Save") { Task { await save() } }
                         .keyboardShortcut(.defaultAction)
-                        .disabled(label.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .padding(.top, 6)
             }
@@ -359,7 +367,23 @@ struct AddressEditView: View {
         await gate.saveTypedItem(id: existing?.id, type: VaultItemType.address,
                                  title: label.trimmingCharacters(in: .whitespaces),
                                  payloadData: data, hosts: existing?.hosts ?? [])
-        onDone()
+        if countryRecognised { onDone() } else { savedWarning = true }   // saved either way
+    }
+
+    /// Country is a PICKER (ISO list), not free text. An imported value that doesn't match a known
+    /// country is shown flagged but still selectable/keepable (soft).
+    private var countryPicker: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            detailFieldLabel("Country")
+            Picker(selection: $country) {
+                Text("—").tag("")
+                if !country.isEmpty && !countryRecognised { Text("\(country) — not recognised").tag(country) }
+                ForEach(CountryList.names, id: \.self) { Text($0).tag($0) }
+            } label: { EmptyView() }
+            .labelsHidden().pickerStyle(.menu)
+            ValidationHint(check: countryRecognised ? .ok : .suspect("not a recognised country — pick one"))
+        }
+        .vaultFieldRow()
     }
 
     @ViewBuilder private func field(_ title: String, _ text: Binding<String>, placeholder: String = "") -> some View {
@@ -371,37 +395,29 @@ struct AddressEditView: View {
     }
 }
 
-// MARK: - Payment — interim placeholder (TV-2b builds the real view)
+// MARK: - Generic interim placeholder (defensive — for a known type without a detail view yet)
 
-/// Honest interim state for a payment item: the payload decodes fine but the card view + masking +
-/// biometric reveal are TV-2b. The real "Couldn't decrypt" error shows ONLY if the typed payload truly
-/// fails to decode — never a false failure for intact data.
-struct PaymentInterimView: View {
+/// Honest interim state for a **known item type that has no detail view yet**. After TV-2b every current
+/// type (login / note / address / payment) has a real view, so this is defensive — a future first-class
+/// type (e.g. Bank Account in TV-2c) would land here until its view ships. Not a decryption-failure
+/// message: the data is intact, there's just no typed view.
+struct TypedInterimView: View {
     let item: StoredItem
-    @EnvironmentObject private var gate: VaultGate
     let onDelete: () -> Void
-
-    @State private var decodes: Bool?
     @State private var confirmingDelete = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                TypedDetailHeader(systemImage: "creditcard", title: item.title)
-                if decodes == false {
-                    Label("Couldn’t decrypt this item.", systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                } else {
-                    Label("Card details — full view coming in the next update.", systemImage: "info.circle")
-                        .foregroundStyle(.secondary)
-                }
+                TypedDetailHeader(systemImage: "doc.text", title: item.title)
+                Label("Details — full view coming in the next update.", systemImage: "info.circle")
+                    .foregroundStyle(.secondary)
                 HStack { Spacer(); Button("Delete", role: .destructive) { confirmingDelete = true } }
                     .padding(.top, 8)
             }
             .padding(24).frame(maxWidth: 560, alignment: .leading)
         }
         .frame(maxWidth: .infinity)
-        .task { decodes = gate.decryptPayment(item) != nil }
         .confirmationDialog("Delete this item?", isPresented: $confirmingDelete) {
             Button("Delete", role: .destructive, action: onDelete)
         }
@@ -413,7 +429,7 @@ struct PaymentInterimView: View {
 /// The `+` picker: Password · Secure Note · Address · Payment (Payment disabled until TV-2b).
 /// Keyboard-first — default focus first option, ↑↓ move, ↵ selects, ESC cancels.
 struct TypePickerView: View {
-    enum Choice { case login, note, address }
+    enum Choice { case login, note, address, payment }
     let onSelect: (Choice) -> Void
     let onCancel: () -> Void
 
@@ -425,7 +441,7 @@ struct TypePickerView: View {
         .init(glyph: "key.fill",        label: "Password",       choice: .login,   note: nil),
         .init(glyph: "note.text",       label: "Secure Note",    choice: .note,    note: nil),
         .init(glyph: "mappin.and.ellipse", label: "Address",     choice: .address, note: nil),
-        .init(glyph: "creditcard",      label: "Payment Method", choice: nil,      note: "coming in the next update"),
+        .init(glyph: "creditcard",      label: "Payment Method", choice: .payment, note: nil),
     ]
 
     var body: some View {

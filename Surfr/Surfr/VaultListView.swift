@@ -187,6 +187,7 @@ struct VaultListView: View {
                                 case .login:   nav.push(.editLogin(nil))
                                 case .note:    nav.push(.editNote(nil))
                                 case .address: nav.push(.editAddress(nil))
+                                case .payment: nav.push(.editPayment(nil))
                                 }
                             },
                             onCancel: { showTypePicker = false }
@@ -208,6 +209,8 @@ struct VaultListView: View {
             detailScaffold { SecureNoteEditView(existing: lookup(id)) { nav.pop() } }
         case .editAddress(let id):
             detailScaffold { AddressEditView(existing: lookup(id)) { nav.pop() } }
+        case .editPayment(let id):
+            detailScaffold { PaymentEditView(existing: lookup(id)) { nav.pop() } }
         case .securityCheck:
             detailScaffold { SecurityCheckView(query: $scQuery, onOpenItem: { nav.push(.editLogin($0)) }) }
         }
@@ -227,9 +230,11 @@ struct VaultListView: View {
                 case VaultItemType.address:
                     AddressDetailView(item: item, onEdit: { nav.push(.editAddress(id)) }, onDelete: del)
                 case VaultItemType.payment:
-                    PaymentInterimView(item: item, onDelete: del)
-                default:
+                    PaymentDetailView(item: item, onEdit: { nav.push(.editPayment(id)) }, onDelete: del)
+                case VaultItemType.login:
                     VaultItemView(item: item, onEdit: { nav.push(.editLogin(id)) }, onDelete: del)
+                default:
+                    TypedInterimView(item: item, onDelete: del)   // unknown/future type (e.g. Bank Account, TV-2c)
                 }
             }
         } else { fallbackToList }
@@ -320,6 +325,13 @@ struct VaultListView: View {
                     primary: item.title.isEmpty ? (item.hosts.first?.host ?? "Login") : item.title,
                     secondary: item.hosts.first?.host,
                     onOpen: { nav.push(.detail(item.id)) }) { healthBadge(for: item) }
+        case .payment:
+            // Glyph + nickname + "•••• last4" — all from the cleartext hint; NO payload decrypt (WF-12).
+            PageRow(host: "",
+                    primary: item.title.isEmpty ? "Card" : item.title,
+                    secondary: paymentRowSubtitle(item),
+                    leadingSystemImage: segment.rowGlyph,
+                    onOpen: { nav.push(.detail(item.id)) }) { EmptyView() }
         default:
             PageRow(host: "",
                     primary: item.title.isEmpty ? "Untitled" : item.title,
@@ -327,6 +339,15 @@ struct VaultListView: View {
                     leadingSystemImage: segment.rowGlyph,
                     onOpen: { nav.push(.detail(item.id)) }) { EmptyView() }
         }
+    }
+
+    /// Payment row subtitle from the **cleartext** hint (network + last-4) — never decrypts the payload.
+    private func paymentRowSubtitle(_ item: StoredItem) -> String? {
+        let net = CardNetwork.from(hint: item.cardNetwork)
+        let last4 = item.last4 ?? ""
+        let parts = [net == .unknown ? nil : net.displayName,
+                     last4.isEmpty ? nil : "•••• \(last4)"].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: "  ")
     }
 
     /// Visible, stateful security controls (per review): Touch ID status/toggle in the green/amber

@@ -12,6 +12,7 @@ struct VaultNav: Equatable {
         case editLogin(UUID?)           // nil = new
         case editNote(UUID?)
         case editAddress(UUID?)
+        case editPayment(UUID?)
     }
 
     private(set) var stack: [Screen] = []
@@ -35,7 +36,7 @@ struct VaultNav: Equatable {
     var openItemID: UUID? {
         switch current {
         case .detail(let id): return id
-        case .editLogin(let id), .editNote(let id), .editAddress(let id): return id
+        case .editLogin(let id), .editNote(let id), .editAddress(let id), .editPayment(let id): return id
         default: return nil
         }
     }
