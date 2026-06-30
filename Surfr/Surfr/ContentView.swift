@@ -1543,6 +1543,7 @@ private struct BrowserCommandHandlers: ViewModifier {
 
 /// A fill awaiting master-password fallback (biometric cancelled/unavailable).
 private struct PendingFill { let item: StoredItem; let frame: WKFrameInfo?; let usernameOnly: Bool }
+private struct PendingTypedFill { let item: StoredItem; let family: String }   // family: "card" | "address" (TV-3a)
 
 struct ContentView: View {
     @StateObject private var browser = BrowserState()
@@ -1572,6 +1573,10 @@ struct ContentView: View {
     @State private var pendingMasterFill: PendingFill?
     @State private var masterFillText = ""
     @State private var masterFillError = false
+    // TV-3a typed (card/address) fill — parallel to the login picker/master-fallback state above.
+    @State private var typedFillCandidates: [StoredItem] = []
+    @State private var typedFillFamily = ""   // "card" | "address"
+    @State private var pendingTypedMasterFill: PendingTypedFill?
     /// Transient browser-chrome confirmation (fill / errors), same toast pattern as the vault.
     @State private var browserToast: String?
     /// ⌘\ on a locked vault: after unlocking, stay on the web page and complete the fill instead of
@@ -1600,6 +1605,10 @@ struct ContentView: View {
                 // DOM). Top-leading origin so anchor viewport coords map directly.
                 if browser.activeTab.kind == .web {
                     FieldKeyOverlay(controller: browser.activeTab.autofill) { summonAutofill() }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        .allowsHitTesting(true)
+                    // TV-3a: card/address click-to-fill icons (native overlay, same coordinate space).
+                    TypedFieldOverlay(controller: browser.activeTab.autofill) { family in summonTypedFill(family) }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .allowsHitTesting(true)
                 }
@@ -1649,11 +1658,29 @@ struct ContentView: View {
                     .transition(.opacity)
                 }
 
+                // TV-3a: inline card/address picker (typed icon), keyboard-first, over the page.
+                if !typedFillCandidates.isEmpty {
+                    TypedFillPicker(
+                        family: typedFillFamily,
+                        candidates: typedFillCandidates,
+                        onPick: { item in Task { await performTypedFill(item: item, family: typedFillFamily) } },
+                        onCancel: { typedFillCandidates = [] })
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 64)
+                    .transition(.opacity)
+                }
+
                 // Master-password fallback for fill (when Touch ID is cancelled/unavailable).
                 if pendingMasterFill != nil {
                     MasterFillPrompt(text: $masterFillText, error: masterFillError,
                                      onSubmit: { Task { await submitMasterFill() } },
                                      onCancel: { pendingMasterFill = nil; masterFillText = "" })
+                }
+                // TV-3a: master-password fallback for typed (card/address) fill.
+                if pendingTypedMasterFill != nil {
+                    MasterFillPrompt(text: $masterFillText, error: masterFillError,
+                                     onSubmit: { Task { await submitTypedMasterFill() } },
+                                     onCancel: { pendingTypedMasterFill = nil; masterFillText = "" })
                 }
 
                 // Save-login prompt (8b), bottom — unobtrusive, distinct Never vs ✕, auto-dismiss.
@@ -1769,7 +1796,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .fillCredential)) { _ in
             summonAutofill()
         }
-        .onChange(of: browser.activeTabID) { _, _ in autofillCandidates = []; saveCoordinator.dismiss() }   // tab switch: drop picker + pending save (zeroed)
+        .onChange(of: browser.activeTabID) { _, _ in autofillCandidates = []; typedFillCandidates = []; saveCoordinator.dismiss() }   // tab switch: drop pickers + pending save (zeroed)
         .onReceive(NotificationCenter.default.publisher(for: .toggleBookmark)) { _ in
             let webView = browser.activeTab.webView
             guard let url = webView.url else { return }
@@ -1992,6 +2019,76 @@ struct ContentView: View {
             let kinds = await browser.activeTab.autofill.fill(username: payload.username, password: payload.password, into: frame)
             browser.activeTab.autofill.markFilled(kinds)
             showBrowserToast("Filled \(name)")
+        }
+    }
+
+    // MARK: - Typed (card/address) click-to-fill (TV-3a) — parallels summon/resolve/perform/doFill above
+
+    /// Clicking a card/address icon. Vault must be unlocked (else open the vault). Card vs address by `family`.
+    private func summonTypedFill(_ family: String) {
+        guard vault.phase == .unlocked else {
+            NotificationCenter.default.post(name: .openVault, object: nil)
+            return
+        }
+        Task { await resolveTypedFill(family) }
+    }
+
+    /// Fresh on-demand typed detection + candidate gather. Candidates = all saved cards (resp. addresses),
+    /// recency-ranked — typed fill is field-presence based, NOT host-matched (any saved card fills any card
+    /// form). Bank accounts are never web-filled. One match → fill directly; several → the picker.
+    private func resolveTypedFill(_ family: String) async {
+        let tab = browser.activeTab
+        if vault.items.isEmpty { await vault.loadItems() }
+        await tab.autofill.refreshTypedDetection()
+        let type = family == "card" ? VaultItemType.payment : VaultItemType.address
+        let candidates = vault.items.filter { $0.type == type }.sorted { $0.modifiedAt > $1.modifiedAt }
+        guard browser.activeTab.id == tab.id else { return }
+        if candidates.isEmpty {
+            showBrowserToast(family == "card" ? "No saved cards to fill" : "No saved addresses to fill")
+        } else if candidates.count == 1 {
+            await performTypedFill(item: candidates[0], family: family)
+        } else {
+            typedFillFamily = family
+            typedFillCandidates = candidates
+        }
+    }
+
+    /// Auth-gate then fill — identical policy to the login `performFill` (setting OFF → fill; ON → Touch ID,
+    /// cancel/no-biometric → master fallback, never a dead end).
+    private func performTypedFill(item: StoredItem, family: String) async {
+        typedFillCandidates = []
+        let biometricEnabled = vault.biometricState == .enabled
+        let biometricOK = (vault.requireAuthToReveal && biometricEnabled) ? await vault.biometricAuthenticateForReveal() : false
+        if FillAuth.needsMasterFallback(requireAuth: vault.requireAuthToReveal,
+                                        biometricEnabled: biometricEnabled, biometricSucceeded: biometricOK) {
+            masterFillText = ""; masterFillError = false
+            pendingTypedMasterFill = PendingTypedFill(item: item, family: family)
+        } else {
+            await doTypedFill(item: item, family: family)
+        }
+    }
+
+    private func submitTypedMasterFill() async {
+        guard let pending = pendingTypedMasterFill else { return }
+        guard await vault.verifyMaster(masterFillText) else { masterFillError = true; return }
+        masterFillText = ""; pendingTypedMasterFill = nil
+        await doTypedFill(item: pending.item, family: pending.family)
+    }
+
+    /// The actual typed fill (post-auth): decrypt ONLY the chosen item, map to fill values, write into the
+    /// detected group, latch the icon green. The plaintext payload is dropped when this returns.
+    private func doTypedFill(item: StoredItem, family: String) async {
+        let tab = browser.activeTab
+        if family == "card" {
+            guard let p = vault.decryptPayment(item) else { showBrowserToast("Couldn’t decrypt card"); return }
+            let ok = await tab.autofill.fillCard(CardFill.values(from: p))
+            if ok { tab.autofill.markFilledTyped("card"); showBrowserToast("Filled card") }
+            else { showBrowserToast("No card field to fill here") }
+        } else {
+            guard let a = vault.decryptAddress(item) else { showBrowserToast("Couldn’t decrypt address"); return }
+            let ok = await tab.autofill.fillAddress(AddressFill.values(from: a))
+            if ok { tab.autofill.markFilledTyped("address"); showBrowserToast("Filled address") }
+            else { showBrowserToast("No address field to fill here") }
         }
     }
 

@@ -451,6 +451,25 @@ Two distinct fill paths, sharing the vault but driven differently.
 > outlives the field's contents. (c) the icon sits **just past the field's trailing edge** (narrow-form
 > fallback: tuck inside) so it doesn't overlap the site's reveal-eye/clear-X.
 
+> **TV-3a as-built (in-browser card/address click-to-fill).** The same Path-B machinery, extended from
+> logins to **cards and addresses**. The isolated-world detector adds **autocomplete-token** detection
+> (card: `cc-number`/`cc-exp`(+`-month`/`-year`)/`cc-csc`/`cc-name`; address: `address-line1/2`,
+> `address-level2`=city, `address-level1`=state, `postal-code`, plus `country`/`name`/`tel`/`email`
+> **only alongside a strong address anchor**) — **token-first, no weak heuristics**, so a search/login/
+> newsletter field gets **no** card/address icon (the load-bearing false-positive guard). It reports the
+> same structure-only `{kind,family,rect}` anchors (one per group, on the number/line1 field), adds **no
+> page-world global**, egresses nothing. A **card glyph / pin glyph** native-overlay icon (amber →
+> green-on-fill, scroll-hide, pageload-reset — all reused from 8e) sits on each detected group. Click →
+> on-demand `__surfrDetectTyped` → the **same auth gate** (Touch ID + master fallback) → fill; one saved
+> card/address fills directly, several show a **picker** rendered from **cleartext metadata only** (card:
+> network · •••• last4 from the hint columns; address: label — city is encrypted, so the picker stays
+> zero-decryption). Only the **chosen** item is decrypted, at fill. **Group fill** (`__surfrFillCard` /
+> `__surfrFillAddress`, `callAsyncJavaScript`, args never string-built) writes number+expiry(+name/CVV
+> where present)/the address fields into their token-matched inputs (incl. `<select>` country/expiry by
+> option match), **visible fields only**. **County is never web-filled** (no token); **bank accounts are
+> never web-filled** (in-vault copy only). Main + same-origin only. Pure value mappers `CardFill`/
+> `AddressFill` in `SurfrCore` (unit-tested); detection/DOM-write are JS (hardware-verified on real sites).
+
 > **Slice 8d as-built (login-available badge).** *(8e adds the per-field icon as the primary affordance;
 > this stays as the host-level hint, now shown on **any** tab state via the host's representative web
 > tab — clicking switches to it, then fills.)* A quiet, clickable **key glyph** on the **host's rail

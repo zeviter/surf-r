@@ -304,6 +304,27 @@ after fill = "surf-r filled this".*
   iframe deferred, as Slice 8).
 - No card/address web-fill before TV-1/TV-2 ship; gate this sub-slice behind a working store + editors.
 
+> **TV-3a as-built (in-browser path).** Card + address click-to-fill into surf-r's own WKWebView pages,
+> built directly on the Slice-8 machinery (isolated `WKContentWorld`, structure-only detection, on-demand
+> detect-at-click, `callAsyncJavaScript` fill, native-overlay icon, auth gate, green latch, pageload
+> reset). **Detection is autocomplete-token-first and conservative:** card fields by `cc-number` / `cc-exp`
+> (+`-month`/`-year`) / `cc-csc` / `cc-name`; address fields by `address-line1/2`, `address-level2` (city),
+> `address-level1` (state), `postal-code`, plus `country`/`name`/`tel`/`email` **only alongside a strong
+> address anchor** (a lone email/tel is a newsletter field, not an address form — the load-bearing
+> false-positive guard). **No weak name/label heuristics** — when in doubt, no icon. A **card glyph** sits
+> on the card form's number field, a **pin glyph** on the address form's primary field (one icon per group;
+> clicking fills the whole group). Click → on-demand re-detect → auth gate (Touch ID + master fallback,
+> honors "Require auth to reveal/copy/fill") → fill. **Single saved item fills directly; several → the
+> picker** (card rows: network · •••• last4 from the **cleartext hint**, no decrypt; address rows:
+> **label only** — city is encrypted-payload, so the picker stays zero-decryption). Only the **chosen** item
+> is decrypted, on fill. **Group fill** maps by token: a card fills number + expiry (combined `MM/YY` and
+> split month/year) + name + CVV *where the field exists and the card has one*; an address fills
+> line1/line2/city/state/postal/country (+name/tel/email). `<select>` country/expiry dropdowns are matched
+> by option. **County is never web-filled** (no standard token; in-vault only). Main + same-origin frames
+> only (cross-origin iframe deferred, as Slice 8). **Bank accounts get NO web-fill** (in-vault copy only).
+> The page can't observe surf-r — the detector adds no page-world global, the icon is native-overlay, and
+> only filled values cross into the page. (System AutoFill / QuickType is the separate S10-2/S10-3.)
+
 ---
 
 ## 9. Uniform ESC / back navigation — WF-19
@@ -399,7 +420,8 @@ overseas vary — never hard-enforced); **SWIFT/BIC** → 8 or 11 alphanumeric (
 warn (**no checksum**); **PIN** → digits (soft); **Account type** → **picker** (fixed list + the imported value
 preserved as a selectable tag so an odd import is never trapped). Validators are pure `BankValidation` in
 `SurfrCore` alongside `CardValidation`.
-| **TV-3** | Click-to-fill for cards/addresses (WF-18): card/address web-form field detection in the isolated world + per-field overlay icon + multi-choice picker. **Pairs with Slice 10 as the autofill block** (shared `SurfrCore` extraction); deferrable without blocking TV-1/TV-2. | med–high |
+| **TV-3a** ✅ | **In-browser** click-to-fill for cards/addresses (WF-18): autocomplete-token detection in the isolated world + native per-group overlay icon + multi-choice picker + group fill via `callAsyncJavaScript`. Built on the Slice-8 path; never auto-fills; bank accounts excluded. | med–high |
+| **S10-2 / S10-3** | The **system** AutoFill extension (`ASCredentialProviderExtension`, Apple-gated) + QuickType/fill flows — login/passkey only (Apple doesn't vend cards/addresses to other apps). Separate from the in-browser TV-3a path. | high |
 
 **Sequencing**
 - **TV-1 done** (data model + `NoteType` parsing + one-time re-classification; headless, unit-tested).

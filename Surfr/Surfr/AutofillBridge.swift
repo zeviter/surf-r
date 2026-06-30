@@ -15,6 +15,9 @@ enum AutofillBridge {
     static let fillInvocation = "return await __surfrFill(username, password)"
     /// Username-only fill for a two-step page-1 (no password sent to the page).
     static let fillUsernameInvocation = "return await __surfrFillUsername(username)"
+    /// Typed card/address group fill (TV-3a) — values passed as a single `values` dict argument.
+    static let fillCardInvocation = "return await __surfrFillCard(values)"
+    static let fillAddressInvocation = "return await __surfrFillAddress(values)"
 
     static let userScriptSource: String = {
         guard let url = Bundle.main.url(forResource: "Autofill", withExtension: "js"),
@@ -55,6 +58,21 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
     /// Field kinds surf-r just filled → their icons latch green ("we filled this", not auth state).
     @Published private(set) var filledFieldKinds: Set<String> = []
 
+    /// A detected card/address form's overlay anchor (TV-3a) — one per group, on its primary field
+    /// (cc-number / address-line1). GENERIC geometry only, no vault data — same isolation as `FieldAnchor`.
+    struct TypedAnchor: Identifiable, Equatable {
+        var id: String { kind }
+        let kind: String   // "card" | "address" (the group; also the green-latch key + glyph selector)
+        let x, y, w, h: Double
+    }
+    /// Main-frame card/address anchors for the typed-fill overlay (TV-3a).
+    @Published private(set) var typedAnchors: [TypedAnchor] = []
+    /// Typed groups surf-r just filled → their icons latch green.
+    @Published private(set) var filledTypedKinds: Set<String> = []
+
+    var hasCardForm: Bool { typedAnchors.contains { $0.kind == "card" } }
+    var hasAddressForm: Bool { typedAnchors.contains { $0.kind == "address" } }
+
     private var contexts: [String: FrameContext] = [:]   // keyed by "scheme://host"; frame nil = main frame
     weak var webView: WKWebView?
 
@@ -80,7 +98,9 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
                 if message.frameInfo.isMainFrame { scrolling = true }
                 return
             case "anchors":
-                if message.frameInfo.isMainFrame { fieldAnchors = Self.parseAnchors(body); scrolling = false }
+                if message.frameInfo.isMainFrame {
+                    fieldAnchors = Self.parseAnchors(body); typedAnchors = Self.parseTypedAnchors(body); scrolling = false
+                }
                 return
             default:
                 break   // "detected"
@@ -90,7 +110,9 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
                    hasUsername: body?["hasUsername"] as? Bool ?? false,
                    frame: message.frameInfo.isMainFrame ? nil : message.frameInfo)
             // Only the main frame's anchors are in the overlay's coordinate space.
-            if message.frameInfo.isMainFrame { fieldAnchors = Self.parseAnchors(body); scrolling = false }
+            if message.frameInfo.isMainFrame {
+                fieldAnchors = Self.parseAnchors(body); typedAnchors = Self.parseTypedAnchors(body); scrolling = false
+            }
         }
     }
 
@@ -147,15 +169,28 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
         }
     }
 
+    private static func parseTypedAnchors(_ body: [String: Any]?) -> [TypedAnchor] {
+        guard let raw = body?["typedAnchors"] as? [[String: Any]] else { return [] }
+        return raw.compactMap { d in
+            guard let kind = d["kind"] as? String,
+                  let x = (d["x"] as? NSNumber)?.doubleValue, let y = (d["y"] as? NSNumber)?.doubleValue,
+                  let w = (d["w"] as? NSNumber)?.doubleValue, let h = (d["h"] as? NSNumber)?.doubleValue else { return nil }
+            return TypedAnchor(kind: kind, x: x, y: y, w: w, h: h)
+        }
+    }
+
     func markFilled(_ kinds: Set<String>) { filledFieldKinds.formUnion(kinds) }
+    func markFilledTyped(_ kind: String) { filledTypedKinds.insert(kind) }
 
     /// Reset on navigation (stale frames/origins/anchors/green-state should not linger).
     func reset() {
         contexts.removeAll()
         hasLoginForm = false
         fieldAnchors = []
+        typedAnchors = []
         scrolling = false
         filledFieldKinds = []
+        filledTypedKinds = []
     }
 
     /// Matched credentials across detected login frames (deduped), each with the frame to fill (nil =
@@ -210,5 +245,37 @@ final class AutofillController: NSObject, ObservableObject, WKScriptMessageHandl
         if d["filledUsername"] as? Bool == true { kinds.insert("username") }
         if d["filledPassword"] as? Bool == true { kinds.insert("password") }
         return kinds
+    }
+
+    // MARK: - Typed (card/address) fill (TV-3a) — main + same-origin, on-demand detect like the login path
+
+    /// Fresh, on-demand typed-field detection when the user clicks a card/address icon — never relies on
+    /// the last debounced scan. Main frame only (cross-origin iframe deferred, as Slice 8).
+    func refreshTypedDetection() async {
+        guard let webView else { return }
+        if let r = try? await webView.callAsyncJavaScript("return __surfrDetectTyped()", arguments: [:],
+                                                          in: nil, contentWorld: AutofillBridge.world) as? [String: Any] {
+            typedAnchors = Self.parseTypedAnchors(r)
+        }
+    }
+
+    /// Fill a card group into the main frame. `values` is built by `CardFill.values` from the chosen,
+    /// just-decrypted card. Returns whether anything was written.
+    @discardableResult
+    func fillCard(_ values: [String: String]) async -> Bool {
+        await fillTyped(AutofillBridge.fillCardInvocation, values: values)
+    }
+
+    /// Fill an address group into the main frame (`AddressFill.values`). Returns whether anything was written.
+    @discardableResult
+    func fillAddress(_ values: [String: String]) async -> Bool {
+        await fillTyped(AutofillBridge.fillAddressInvocation, values: values)
+    }
+
+    private func fillTyped(_ invocation: String, values: [String: String]) async -> Bool {
+        guard let webView else { return false }
+        let result = try? await webView.callAsyncJavaScript(
+            invocation, arguments: ["values": values], in: nil, contentWorld: AutofillBridge.world)
+        return (result as? [String: Any])?["filled"] as? Bool ?? false
     }
 }

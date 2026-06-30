@@ -47,8 +47,15 @@
   zero-decryption Bank rows, fifth "Bank" segment + picker option, soft `BankValidation` (sort code / account
   number / SWIFT / IBAN-soft / PIN; account-type picker), and a one-time guarded `NoteType:Bank Account`
   re-classification (V2 marker). **The typed vault is now fully built** (all 5 types: login/note/address/
-  payment/bank). **TV-3** — card/address click-to-fill (WF-18); **pairs with Slice 10**, sharing the
-  `SurfrCore` extraction. **The only remaining vault work is the autofill block: TV-3 + Slice 10.**
+  payment/bank). **TV-3a done** — **in-browser** card/address click-to-fill (WF-18): autocomplete-token
+  detection in the isolated world (token-first, conservative — no card/address icon on search/login/
+  newsletter fields), native per-group overlay icon (card/pin glyph), multi-choice picker (cleartext
+  hint/label only — zero-decryption), and group fill via `callAsyncJavaScript` (`<select>` country/expiry
+  matched by option); never auto-fills; **county never web-filled** (no token); **bank accounts never
+  web-filled** (in-vault copy only). Pure `CardFill`/`AddressFill` mappers in `SurfrCore`. **Remaining
+  vault work = the SYSTEM autofill block: S10-2** (`ASCredentialProviderExtension` target, Apple-gated)
+  **+ S10-3** (QuickType / fill flows) — login/passkey only (Apple doesn't vend cards/addresses to other
+  apps); the in-browser TV-3a path is separate and complete.
   - ☐ **(post-v1) First-class long-tail editors** (Passport / Bank Account / Wi-Fi / SSH Key / SSN …):
     v1 keeps them as generic Secure Notes with the raw body preserved verbatim; structured editors deferred.
   - ☐ **(post-v1) "Convert type" flow** (e.g. note → payment): v1 is create-as-type only; a mis-imported

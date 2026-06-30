@@ -139,10 +139,11 @@
   }
   globalThis.__surfrFieldAnchors = anchorList;
 
-  // STRUCTURE ONLY (+ generic anchor geometry) — no values.
+  // STRUCTURE ONLY (+ generic anchor geometry) — no values. Carries the typed (card/address) anchors
+  // alongside the login anchors so the native overlay can draw both without a separate scan.
   function detect() {
     const s = snapshot();
-    HANDLER.postMessage({ type: "detected", origin: location.origin, hasPassword: s.hasPassword, hasUsername: s.hasUsername, anchors: anchorList() });
+    HANDLER.postMessage({ type: "detected", origin: location.origin, hasPassword: s.hasPassword, hasUsername: s.hasUsername, anchors: anchorList(), typedAnchors: typedAnchorList() });
   }
 
   // Username field for a password field: explicit autocomplete=username, else the nearest visible
@@ -186,6 +187,124 @@
     }
     setValue(pw, password);
     return { filledPassword: true, filledUsername: filledUsername };
+  };
+
+  // ── Typed fill: card + address click-to-fill (TV-3a) ────────────────────────────────────────────
+  // STRUCTURE-ONLY detection, token-first. The `autocomplete` token is the strong signal and is PREFERRED
+  // decisively; weak name/label heuristics are deliberately omitted — a false "fill a card here?" on a
+  // non-card field is worse than a missed offer. Same isolation/visibility guarantees as the login path:
+  // reports only {kind, family, rect}, never values, adds no page-world global, egresses nothing.
+
+  // The field-type token of an autocomplete attribute — the LAST token, so a "shipping cc-number" /
+  // "billing address-line1" section prefix is ignored. Lowercased; "off"/"on"/empty → "".
+  function autocompleteToken(el) {
+    const raw = (el.getAttribute("autocomplete") || "").toLowerCase().trim();
+    if (!raw || raw === "off" || raw === "on") return "";
+    const parts = raw.split(/\s+/);
+    let tok = parts[parts.length - 1];
+    if (tok === "country-name") tok = "country";   // normalize the two country spellings
+    return tok;
+  }
+
+  const CARD_TOKENS = ["cc-number", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-csc", "cc-name"];
+  const ADDR_STRONG = ["address-line1", "address-line2", "address-level2", "address-level1", "postal-code"];
+  const ADDR_WEAK = ["country", "name", "tel", "email"];   // fill ONLY alongside a strong address anchor
+
+  // token → first visible element, split into card + address groups. A card group counts only with a
+  // cc-number (you fill a card by its number); an address group counts only with a STRONG anchor present
+  // (a lone email/tel/name/country is a newsletter/contact field, NOT an address form — the load-bearing
+  // false-positive guard).
+  function typedFieldMap() {
+    const els = deepQueryAll("input, select").filter(isVisible).filter((el) => !looksLikeSearch(el));
+    const card = {}, addr = {};
+    for (const el of els) {
+      const tok = autocompleteToken(el);
+      if (CARD_TOKENS.includes(tok)) { if (!card[tok]) card[tok] = el; }
+      else if (ADDR_STRONG.includes(tok) || ADDR_WEAK.includes(tok)) { if (!addr[tok]) addr[tok] = el; }
+    }
+    const hasCard = !!card["cc-number"];
+    const hasAddress = ADDR_STRONG.some((t) => addr[t]);
+    return { card: hasCard ? card : {}, addr: hasAddress ? addr : {}, hasCard: hasCard, hasAddress: hasAddress };
+  }
+
+  // The primary field each group's single icon anchors to (clicking it fills the WHOLE group).
+  function primaryAddrField(addr) {
+    return addr["address-line1"] || addr["postal-code"] || addr["address-level2"] || addr["address-level1"] || addr["address-line2"] || null;
+  }
+  function typedAnchorList() {
+    const m = typedFieldMap();
+    const out = [];
+    if (m.hasCard && m.card["cc-number"]) out.push(Object.assign({ kind: "card", family: "card" }, rectOf(m.card["cc-number"])));
+    if (m.hasAddress) { const p = primaryAddrField(m.addr); if (p) out.push(Object.assign({ kind: "address", family: "address" }, rectOf(p))); }
+    return out;
+  }
+
+  // On-demand fresh read native makes when the user clicks a typed icon (never a stale scan).
+  globalThis.__surfrDetectTyped = function () {
+    const m = typedFieldMap();
+    return { hasCard: m.hasCard, hasAddress: m.hasAddress, anchors: typedAnchorList() };
+  };
+
+  // Set a value on an <input> OR a <select> (country/expiry dropdowns). Visible fields only
+  // (hidden-field-trap safe). Returns whether it wrote.
+  function setFieldValue(el, value) {
+    if (!el || value == null || value === "" || !isVisible(el)) return false;
+    if (el.tagName === "SELECT") return setSelectValue(el, value);
+    setValue(el, value);
+    return true;
+  }
+  function setSelectValue(sel, value) {
+    const want = String(value).toLowerCase().trim();
+    let matched = null;
+    for (const opt of sel.options) {
+      if ((opt.value || "").toLowerCase().trim() === want || (opt.textContent || "").toLowerCase().trim() === want) { matched = opt; break; }
+    }
+    if (!matched) {   // looser contains-match (e.g. "United Kingdom" vs "United Kingdom (UK)")
+      for (const opt of sel.options) {
+        const t = (opt.textContent || "").toLowerCase().trim();
+        if (t && (t.includes(want) || want.includes(t))) { matched = opt; break; }
+      }
+    }
+    if (!matched) return false;
+    sel.focus(); sel.value = matched.value;
+    sel.dispatchEvent(new Event("input", { bubbles: true }));
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  // Fill the card group. `v` = { number, name, cvv, exp, expMonth, expYear } (cvv/name optional, only
+  // filled when both the value AND the field exist — never invented).
+  globalThis.__surfrFillCard = function (v) {
+    const m = typedFieldMap();
+    if (!m.hasCard) return { filled: false, kind: "card" };
+    const c = m.card;
+    let any = false;
+    if (setFieldValue(c["cc-number"], v.number)) any = true;
+    if (setFieldValue(c["cc-name"], v.name)) any = true;
+    if (setFieldValue(c["cc-csc"], v.cvv)) any = true;       // only if the card HAS a cvv and the form a cc-csc
+    setFieldValue(c["cc-exp"], v.exp);
+    setFieldValue(c["cc-exp-month"], v.expMonth);
+    setFieldValue(c["cc-exp-year"], v.expYear);
+    return { filled: any, kind: "card" };
+  };
+
+  // Fill the address group. `v` = { line1, line2, city, state, postal, country, name, tel, email }.
+  globalThis.__surfrFillAddress = function (v) {
+    const m = typedFieldMap();
+    if (!m.hasAddress) return { filled: false, kind: "address" };
+    const a = m.addr;
+    let any = false;
+    const set = (tok, val) => { if (setFieldValue(a[tok], val)) any = true; };
+    set("address-line1", v.line1);
+    set("address-line2", v.line2);
+    set("address-level2", v.city);
+    set("address-level1", v.state);
+    set("postal-code", v.postal);
+    set("country", v.country);
+    set("name", v.name);     // weak fields only fill because a strong anchor gated `hasAddress`
+    set("tel", v.tel);
+    set("email", v.email);
+    return { filled: any, kind: "address" };
   };
 
   // ── Save capture (Slice 8b) ───────────────────────────────────────────────────────────────────
@@ -271,9 +390,12 @@
   // native overlay can't track WebKit's async scroll smoothly), then re-post fresh anchors when scroll
   // settles. Only acts when there are fillable fields. Resize re-anchors too.
   let settle = null;
-  function reanchor() { if (anchorList().length) HANDLER.postMessage({ type: "anchors", anchors: anchorList() }); }
+  function reanchor() {
+    const a = anchorList(), t = typedAnchorList();
+    if (a.length || t.length) HANDLER.postMessage({ type: "anchors", anchors: a, typedAnchors: t });
+  }
   window.addEventListener("scroll", function () {
-    if (!anchorList().length) return;
+    if (!anchorList().length && !typedAnchorList().length) return;
     HANDLER.postMessage({ type: "scrolling" });
     if (settle) clearTimeout(settle);
     settle = setTimeout(reanchor, 140);
