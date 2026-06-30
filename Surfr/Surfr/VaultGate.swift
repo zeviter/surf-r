@@ -237,6 +237,7 @@ final class VaultGate: ObservableObject {
             await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
             await backfillPaymentHints()           // TV-2b: derive cleartext last-4/network for cards
             await backfillBankAccountHints()       // TV-2c: derive cleartext account-last-4 for bank accounts
+            await healTypedNotesFromRawBodyIfNeeded()  // TV-2c fix: re-extract full multi-line Notes from rawBody
             return true
         } catch {
             lastError = "Incorrect master password."
@@ -264,6 +265,7 @@ final class VaultGate: ObservableObject {
             await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
             await backfillPaymentHints()           // TV-2b: derive cleartext last-4/network for cards
             await backfillBankAccountHints()       // TV-2c: derive cleartext account-last-4 for bank accounts
+            await healTypedNotesFromRawBodyIfNeeded()  // TV-2c fix: re-extract full multi-line Notes from rawBody
             return true
         } catch {
             lastError = "Recovery code not recognized."
@@ -771,6 +773,73 @@ final class VaultGate: ObservableObject {
         }
     }
 
+    // MARK: - Typed vault — heal truncated multi-line Notes from rawBody (TV-2c fix)
+
+    static let typedNotesHealedKey = "SurfrTypedVaultNotesHealedV1"
+
+    /// One-time, guarded heal of items whose **Notes** field was truncated to its first line by the old
+    /// line-by-line parser (the full note is preserved in `rawBody`, so this is a pure re-extraction — no
+    /// data was lost). Runs once via a UserDefaults marker. New parses already capture the full tail.
+    func healTypedNotesFromRawBodyIfNeeded() async {
+        guard phase == .unlocked, !UserDefaults.standard.bool(forKey: Self.typedNotesHealedKey) else { return }
+        await healTypedNotesFromRawBody()
+        UserDefaults.standard.set(true, forKey: Self.typedNotesHealedKey)
+    }
+
+    /// How the OLD parser populated `notes` for a given type — the signature the heal matches so it never
+    /// clobbers a user edit (an edited note won't equal the old extraction).
+    private enum OldNotesExtraction { case firstLine, none }
+
+    /// The full multi-line notes to heal an item to, or `nil` if no heal is warranted (already full, a user
+    /// edit, or genuinely empty). `signature` is what the old parser would have stored for this type.
+    private static func healedNotes(stored: String, rawBody: String, oldExtraction: OldNotesExtraction) -> String? {
+        guard let tail = TypedNoteParser.notesTail(fromBody: rawBody), !tail.full.isEmpty else { return nil }
+        let signature = oldExtraction == .firstLine ? tail.firstLineValue : ""   // payment/bank kept line 1; address kept nothing
+        guard stored == signature, signature != tail.full else { return nil }
+        return tail.full
+    }
+
+    /// Walk payment / address / bankAccount items ONE AT A TIME and, where the stored `notes` matches the
+    /// old parser's truncated output (and the original `rawBody` holds a longer note), re-extract the full
+    /// note and re-save — preserving every other (possibly user-edited) field and the cleartext hint
+    /// (the per-type save recomputes it). Idempotent: a healed/edited/already-full item no longer matches.
+    func healTypedNotesFromRawBody() async {
+        guard let store, phase == .unlocked else { return }
+        var changed = false
+        for item in items {
+            switch item.type {
+            case VaultItemType.payment:
+                guard var p = decryptPayment(item),
+                      let full = Self.healedNotes(stored: p.notes, rawBody: p.rawBody, oldExtraction: .firstLine)
+                else { continue }
+                p.notes = full
+                await savePayment(id: item.id, title: item.title, payload: p); changed = true
+            case VaultItemType.bankAccount:
+                guard var b = decryptBankAccount(item),
+                      let full = Self.healedNotes(stored: b.notes, rawBody: b.rawBody, oldExtraction: .firstLine)
+                else { continue }
+                b.notes = full
+                await saveBankAccount(id: item.id, title: item.title, payload: b); changed = true
+            case VaultItemType.address:
+                // Address never had a structured notes field before this fix, so the old extraction was
+                // empty — populate it from rawBody when present (safe: no prior address-note edits exist).
+                guard var a = decryptAddress(item),
+                      let full = Self.healedNotes(stored: a.notes, rawBody: a.rawBody, oldExtraction: .none)
+                else { continue }
+                a.notes = full
+                guard let data = try? a.encoded() else { continue }
+                await saveTypedItem(id: item.id, type: VaultItemType.address, title: item.title,
+                                    payloadData: data, hosts: item.hosts); changed = true
+            default:
+                continue
+            }
+        }
+        if changed {
+            items = (try? await store.allItems()) ?? items
+            vaultLog("typed-vault: healed truncated multi-line Notes from rawBody")
+        }
+    }
+
     /// Re-encrypt an item's payload as a typed shape and update its `type`. The typed plaintext (which
     /// includes a card number / CVV) is zeroed immediately after sealing. Returns whether it wrote.
     @discardableResult
@@ -1051,6 +1120,7 @@ final class VaultGate: ObservableObject {
             await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
             await backfillPaymentHints()           // TV-2b: derive cleartext last-4/network for cards
             await backfillBankAccountHints()       // TV-2c: derive cleartext account-last-4 for bank accounts
+            await healTypedNotesFromRawBodyIfNeeded()  // TV-2c fix: re-extract full multi-line Notes from rawBody
             vaultLog("biometric unlock succeeded")
             return true
         } catch BiometricFailure.userCancelled {

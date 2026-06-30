@@ -67,16 +67,42 @@ public struct AddressPayload: Codable, Equatable, Sendable {
     public var phone: String
     public var phoneCountry: String?     // ISO-3 (cc3l) when the phone arrived as JSON
     public var email: String
+    public var notes: String             // free-form Notes tail (added in the multi-line-notes fix)
     public var rawBody: String           // the full original note body — lossless
 
     public init(label: String = "", firstName: String = "", lastName: String = "", company: String = "",
                 line1: String = "", line2: String = "", city: String = "", county: String? = nil,
                 stateProvince: String? = nil, postalCode: String = "", country: String = "",
-                phone: String = "", phoneCountry: String? = nil, email: String = "", rawBody: String = "") {
+                phone: String = "", phoneCountry: String? = nil, email: String = "", notes: String = "",
+                rawBody: String = "") {
         self.label = label; self.firstName = firstName; self.lastName = lastName; self.company = company
         self.line1 = line1; self.line2 = line2; self.city = city; self.county = county
         self.stateProvince = stateProvince; self.postalCode = postalCode; self.country = country
-        self.phone = phone; self.phoneCountry = phoneCountry; self.email = email; self.rawBody = rawBody
+        self.phone = phone; self.phoneCountry = phoneCountry; self.email = email; self.notes = notes
+        self.rawBody = rawBody
+    }
+
+    /// `notes` was added after addresses were already stored, so decode it **tolerantly** — an
+    /// already-stored address (no `notes` key) decodes with an empty note (the heal then re-extracts it
+    /// from `rawBody`). Every other field stays required, exactly as before.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        label = try c.decode(String.self, forKey: .label)
+        firstName = try c.decode(String.self, forKey: .firstName)
+        lastName = try c.decode(String.self, forKey: .lastName)
+        company = try c.decode(String.self, forKey: .company)
+        line1 = try c.decode(String.self, forKey: .line1)
+        line2 = try c.decode(String.self, forKey: .line2)
+        city = try c.decode(String.self, forKey: .city)
+        county = try c.decodeIfPresent(String.self, forKey: .county)
+        stateProvince = try c.decodeIfPresent(String.self, forKey: .stateProvince)
+        postalCode = try c.decode(String.self, forKey: .postalCode)
+        country = try c.decode(String.self, forKey: .country)
+        phone = try c.decode(String.self, forKey: .phone)
+        phoneCountry = try c.decodeIfPresent(String.self, forKey: .phoneCountry)
+        email = try c.decode(String.self, forKey: .email)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""   // tolerant: pre-fix addresses lack it
+        rawBody = try c.decode(String.self, forKey: .rawBody)
     }
 
     public func encoded() throws -> Data { try encodeTypedPayload(self) }
@@ -160,15 +186,26 @@ public enum TypedNoteParser {
         let noteType = String(firstLine.dropFirst("notetype:".count))
             .trimmingCharacters(in: .whitespaces).lowercased()
 
-        // Build a label→value map from the remaining lines (split on the FIRST colon, so a JSON phone
-        // value's internal colons stay in the value). Last duplicate wins; rawBody keeps everything.
+        let tail = notesTail(in: lines)
+
+        // `Notes:` is the **terminal, free-form, multi-line** field — everything from the `Notes:` marker
+        // to the end of the body is the note (internal newlines preserved). So stop the label parse there:
+        // it prevents the multi-line tail being truncated to its first line, AND prevents a note-tail line
+        // that merely *looks* like a label (e.g. "Number: 123" inside the note) polluting a structured field.
+        let notesLineIndex = tail?.lineIndex ?? lines.count
+
+        // Build a label→value map from the remaining lines up to (not incl.) the Notes line (split on the
+        // FIRST colon, so a JSON phone value's internal colons stay in the value). Last duplicate wins;
+        // rawBody keeps everything.
         var fields: [String: String] = [:]
-        for line in lines.dropFirst() {
+        for idx in 1..<max(1, lines.count) where idx < notesLineIndex {
+            let line = lines[idx]
             guard let colon = line.firstIndex(of: ":") else { continue }
             let label = String(line[..<colon]).trimmingCharacters(in: .whitespaces).lowercased()
             let value = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
             if !label.isEmpty { fields[label] = value }
         }
+        if let tail { fields["notes"] = tail.full }   // the full terminal tail, not just line 1
 
         switch noteType {
         case "credit card":  return .payment(parsePayment(title: title, body: body, fields: fields))
@@ -223,6 +260,7 @@ public enum TypedNoteParser {
             phone:         phone,
             phoneCountry:  phoneCountry,
             email:         fields["email address"] ?? "",
+            notes:         fields["notes"] ?? "",
             rawBody:       body
         )
     }
@@ -270,5 +308,30 @@ public enum TypedNoteParser {
     private static func nonEmpty(_ value: String?) -> String? {
         guard let value, !value.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
         return value
+    }
+
+    /// The free-form **Notes** tail of a NoteType body: from the first `Notes:` line (its inline value)
+    /// through the end of the body, internal newlines preserved, outer whitespace/newlines trimmed.
+    /// `firstLineValue` is what the *old* (buggy) single-line parser captured — the heal uses it to detect a
+    /// truncated note without clobbering a user edit. `lineIndex` is where `classify` stops label-parsing.
+    /// Returns `nil` when the body has no `Notes:` line. Pure.
+    static func notesTail(in lines: [String]) -> (firstLineValue: String, full: String, lineIndex: Int)? {
+        for idx in 1..<max(1, lines.count) {
+            let line = lines[idx]
+            guard let colon = line.firstIndex(of: ":") else { continue }
+            let label = String(line[..<colon]).trimmingCharacters(in: .whitespaces).lowercased()
+            guard label == "notes" else { continue }
+            let firstValue = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+            let full = (([firstValue] + lines[(idx + 1)...]).joined(separator: "\n"))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (firstValue, full, idx)
+        }
+        return nil
+    }
+
+    /// Body-string convenience for the heal walk: the buggy first-line value + the full multi-line notes.
+    public static func notesTail(fromBody body: String) -> (firstLineValue: String, full: String)? {
+        guard let t = notesTail(in: body.components(separatedBy: "\n")) else { return nil }
+        return (t.firstLineValue, t.full)
     }
 }

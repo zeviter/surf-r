@@ -41,7 +41,7 @@ decrypted note body's first line.
 |----|----|----|
 | `login` *(existing)* | username, password, notes, totp, urls — unchanged | password entries |
 | `payment` | nickname, cardholderName, number\*, type, expiry, startDate, cvv\*, notes | `NoteType:Credit Card` |
-| `address` | label, firstName, lastName, company, line1, line2, city, county (opt·UK), stateProvince, postalCode, country, phone, email — **each discrete** | `NoteType:Address` |
+| `address` | label, firstName, lastName, company, line1, line2, city, county (opt·UK), stateProvince, postalCode, country, phone, email, notes — **each discrete** | `NoteType:Address` |
 | `bankAccount` | bankName, accountType, sortCode (LastPass "Routing Number"), accountNumber\*, swift, iban\*, pin\*, branchAddress, branchPhone, notes | `NoteType:Bank Account` |
 | `secureNote` | title + free-text body (raw original preserved) | all other `NoteType:` + plain notes |
 
@@ -52,9 +52,15 @@ decrypted note body's first line.
 **Build rules — WF-11 (parsing; headless-testable, TV-1)**
 - Read decrypted note body; line 1 matches `^NoteType:Credit Card` → payment; `^NoteType:Address` →
   address; else → secureNote.
-- For payment/address, extract the labelled lines (`Number:`, `Security Code:`, `Address 1:`,
+- For payment/address/bankAccount, extract the labelled lines (`Number:`, `Security Code:`, `Address 1:`,
   `City / Town:`, `County:`, `Zip / Postal Code:`, `Country:`, …) into structured fields. **Keep the
   raw body too** — if any line doesn't map, nothing is lost and the note body stays viewable.
+- **`Notes:` is the terminal, free-form, MULTI-LINE field** — everything from the `Notes:` marker to the
+  **end of the body** is the note value (internal newlines preserved). Label parsing **stops** at `Notes:`,
+  which (a) keeps a multi-line note whole instead of truncating it to line 1, and (b) prevents a note-tail
+  line that merely *looks* like a label (e.g. `Number: 123` written inside the note) polluting a structured
+  field. All three structured types (payment/address/bankAccount) carry this notes tail. *(Items stored by
+  the earlier line-by-line parser are healed once from the lossless `rawBody` — no data was lost.)*
 - Phone fields arrive as JSON (`{"num":...,"cc3l":"GBR"}`) — parse leniently; on failure keep the raw
   string. Never drop data.
 - Missing, misspelled, or absent `NoteType:` → secureNote. Misfiling is worse than generic.

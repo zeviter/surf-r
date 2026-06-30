@@ -227,4 +227,79 @@ final class TypedVaultTests: XCTestCase {
         // re-encode is byte-stable for an unchanged value (deterministic .sortedKeys encoding).
         XCTAssertEqual(try again.encoded(), try b.encoded())
     }
+
+    // MARK: Multi-line Notes tail — the terminal free-form field (TV-2c fix)
+
+    /// `Notes:` captures everything to end-of-body (internal newlines preserved), AND a note-tail line that
+    /// merely *looks* like a label must NOT pollute a structured field (parsing stops at `Notes:`).
+    func test_payment_multiLineNotes_capturedWhole_andNoFieldPollution() {
+        let body = """
+        NoteType:Credit Card
+        Type:Visa
+        Number:4111 1111 1111 1111
+        Notes:first note line
+        Security Code: not a real cvv
+        second note line
+        """
+        guard case .payment(let p) = TypedNoteParser.classify(title: "X", body: body) else { return XCTFail() }
+        XCTAssertEqual(p.cardType, "Visa")          // real field before Notes survives
+        XCTAssertEqual(p.cvv, "")                   // "Security Code:" INSIDE the note must not set cvv
+        XCTAssertEqual(p.notes, "first note line\nSecurity Code: not a real cvv\nsecond note line")
+    }
+
+    func test_address_multiLineNotes_capturedWhole() {
+        let body = """
+        NoteType:Address
+        First Name:Jane
+        Address 1:221B Baker Street
+        Notes:near the station
+        gate code: 1234
+        ring twice
+        """
+        guard case .address(let a) = TypedNoteParser.classify(title: "Home", body: body) else { return XCTFail() }
+        XCTAssertEqual(a.firstName, "Jane")
+        XCTAssertEqual(a.line1, "221B Baker Street")
+        XCTAssertEqual(a.notes, "near the station\ngate code: 1234\nring twice")
+    }
+
+    func test_bankAccount_multiLineNotes_emptyFirstLine_capturesTail() {
+        // The instruction's shape: "Notes:" then content on following lines, incl. a label-looking line.
+        let body = """
+        NoteType:Bank Account
+        Bank Name:Barclays
+        Account Number:12345678
+        Notes:
+        balance: 500
+        call branch
+        """
+        guard case .bankAccount(let b) = TypedNoteParser.classify(title: "B", body: body) else { return XCTFail() }
+        XCTAssertEqual(b.bankName, "Barclays")
+        XCTAssertEqual(b.accountNumber, "12345678")
+        XCTAssertEqual(b.notes, "balance: 500\ncall branch")   // leading empty Notes: line trimmed; tail kept
+    }
+
+    func test_roundTrip_multiLineNotesSurvivesEncodeDecode() throws {
+        let body = "NoteType:Bank Account\nBank Name:Barclays\nNotes:one\ntwo\nthree"
+        guard case .bankAccount(let b) = TypedNoteParser.classify(title: "B", body: body) else { return XCTFail() }
+        XCTAssertEqual(b.notes, "one\ntwo\nthree")
+        let again = try BankAccountPayload.decoded(from: try b.encoded())
+        XCTAssertEqual(again.notes, "one\ntwo\nthree")          // multi-line note survives the AEAD round-trip
+    }
+
+    /// The heal helper's inputs: `notesTail` exposes both the old buggy first-line value and the full tail.
+    func test_notesTail_exposesFirstLineAndFull() {
+        let t = TypedNoteParser.notesTail(fromBody: "NoteType:Credit Card\nNumber:4111\nNotes:main\nextra line")
+        XCTAssertEqual(t?.firstLineValue, "main")
+        XCTAssertEqual(t?.full, "main\nextra line")
+        XCTAssertNil(TypedNoteParser.notesTail(fromBody: "NoteType:Credit Card\nNumber:4111"))  // no Notes line
+    }
+
+    /// Backward-compat: an address stored BEFORE the `notes` field existed (no `notes` key) still decodes,
+    /// with an empty note (the heal then re-extracts it from rawBody).
+    func test_address_decodesWithoutNotesKey_tolerant() throws {
+        let legacyJSON = #"{"label":"Home","firstName":"Jane","lastName":"","company":"","line1":"1 St","line2":"","city":"London","postalCode":"NW1","country":"UK","phone":"","email":"","rawBody":"NoteType:Address\nNotes:hi"}"#
+        let a = try AddressPayload.decoded(from: Data(legacyJSON.utf8))
+        XCTAssertEqual(a.firstName, "Jane")
+        XCTAssertEqual(a.notes, "")          // missing key → empty, not a decode failure
+    }
 }

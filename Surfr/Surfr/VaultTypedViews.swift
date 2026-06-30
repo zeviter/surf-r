@@ -237,6 +237,7 @@ struct AddressDetailView: View {
                           check: CountryList.isRecognised(a.country) ? .ok : .suspect("not a recognised country"))
                     field("Phone", a.phone)
                     field("Email", a.email)
+                    field("Notes", a.notes)
                 }
 
                 HStack {
@@ -303,6 +304,7 @@ struct AddressEditView: View {
     @State private var country = ""
     @State private var phone = ""
     @State private var email = ""
+    @State private var notes = ""
     @State private var rawBody = ""
     @State private var phoneCountry: String?
     @State private var loaded = false
@@ -326,6 +328,7 @@ struct AddressEditView: View {
                 HStack(alignment: .top, spacing: 10) { field("Postal code", $postalCode); countryPicker }
                 field("Phone", $phone)
                 field("Email", $email)
+                notesField
 
                 if savedWarning { SavedAnywayBanner(onDone: onDone).padding(.vertical, 6) }
 
@@ -350,7 +353,7 @@ struct AddressEditView: View {
             line1 = a.line1; line2 = a.line2; city = a.city
             county = a.county ?? ""; stateProvince = a.stateProvince ?? ""
             postalCode = a.postalCode; country = a.country; phone = a.phone; email = a.email
-            phoneCountry = a.phoneCountry; rawBody = a.rawBody
+            notes = a.notes; phoneCountry = a.phoneCountry; rawBody = a.rawBody
             if label.isEmpty { label = a.label }
         }
     }
@@ -361,7 +364,7 @@ struct AddressEditView: View {
             label: label, firstName: firstName, lastName: lastName, company: company,
             line1: line1, line2: line2, city: city, county: n(county), stateProvince: n(stateProvince),
             postalCode: postalCode, country: country, phone: phone, phoneCountry: phoneCountry,
-            email: email, rawBody: rawBody
+            email: email, notes: notes, rawBody: rawBody
         )
         guard let data = try? addr.encoded() else { return }
         await gate.saveTypedItem(id: existing?.id, type: VaultItemType.address,
@@ -390,6 +393,16 @@ struct AddressEditView: View {
         VStack(alignment: .leading, spacing: 5) {
             detailFieldLabel(title)
             TextField(placeholder, text: text).textFieldStyle(.roundedBorder)
+        }
+        .vaultFieldRow()
+    }
+
+    /// Multi-line free-form notes (the terminal Notes tail) — a small text editor, not a single-line field.
+    private var notesField: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            detailFieldLabel("Notes")
+            TextEditor(text: $notes).frame(minHeight: 80)
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.gray.opacity(0.3)))
         }
         .vaultFieldRow()
     }
