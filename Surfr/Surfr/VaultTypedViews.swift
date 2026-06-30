@@ -397,10 +397,11 @@ struct AddressEditView: View {
 
 // MARK: - Generic interim placeholder (defensive — for a known type without a detail view yet)
 
-/// Honest interim state for a **known item type that has no detail view yet**. After TV-2b every current
-/// type (login / note / address / payment) has a real view, so this is defensive — a future first-class
-/// type (e.g. Bank Account in TV-2c) would land here until its view ships. Not a decryption-failure
-/// message: the data is intact, there's just no typed view.
+/// Honest interim state for a **known item type that has no detail view yet**. As of TV-2c every shipped
+/// type (login / note / address / payment / bank account) has a real view, so this is **purely defensive**
+/// — only a future/reserved type (e.g. the reserved `passkey` v2 type) would land here until its view
+/// ships. No shipped type reaches it. Not a decryption-failure message: the data is intact, there's just
+/// no typed view.
 struct TypedInterimView: View {
     let item: StoredItem
     let onDelete: () -> Void
@@ -429,7 +430,7 @@ struct TypedInterimView: View {
 /// The `+` picker: Password · Secure Note · Address · Payment (Payment disabled until TV-2b).
 /// Keyboard-first — default focus first option, ↑↓ move, ↵ selects, ESC cancels.
 struct TypePickerView: View {
-    enum Choice { case login, note, address, payment }
+    enum Choice { case login, note, address, payment, bankAccount }
     let onSelect: (Choice) -> Void
     let onCancel: () -> Void
 
@@ -442,6 +443,7 @@ struct TypePickerView: View {
         .init(glyph: "note.text",       label: "Secure Note",    choice: .note,    note: nil),
         .init(glyph: "mappin.and.ellipse", label: "Address",     choice: .address, note: nil),
         .init(glyph: "creditcard",      label: "Payment Method", choice: .payment, note: nil),
+        .init(glyph: "building.columns", label: "Bank Account",  choice: .bankAccount, note: nil),
     ]
 
     var body: some View {

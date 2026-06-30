@@ -84,3 +84,75 @@ public enum CardValidation {
         return (m, y)
     }
 }
+
+/// Pure, **soft** bank-account validators (TV-2c). Same never-block contract as `CardValidation`: each
+/// GUIDES/WARNS only, returns `.ok` for empty input, and never gates a save or traps an existing import.
+/// IBAN is deliberately a soft length/format warn — **no checksum** (country formats vary; overkill +
+/// breakage risk for a personal vault).
+public enum BankValidation {
+
+    /// UK sort code — suspect unless exactly 6 digits. Empty ⇒ ok. (Display is `XX-XX-XX` via `formatSortCode`.)
+    public static func sortCode(_ s: String) -> FieldCheck {
+        guard !s.trimmingCharacters(in: .whitespaces).isEmpty else { return .ok }
+        let d = s.filter(\.isNumber)
+        return (d.count == 6) ? .ok : .suspect("a sort code is usually 6 digits")
+    }
+
+    /// Format a (possibly partial) sort code as `XX-XX-XX` for display. Non-6-digit input is returned
+    /// trimmed but ungrouped, so a junk import still shows (never wiped).
+    public static func formatSortCode(_ s: String) -> String {
+        let d = s.filter(\.isNumber)
+        guard d.count == 6 else { return s.trimmingCharacters(in: .whitespaces) }
+        return stride(from: 0, to: 6, by: 2).map { i -> String in
+            let start = d.index(d.startIndex, offsetBy: i)
+            return String(d[start..<d.index(start, offsetBy: 2)])
+        }.joined(separator: "-")
+    }
+
+    /// Account number — UK is 8 digits, but overseas/edge accounts vary, so this is a wide soft check:
+    /// suspect only if it contains non-digits or is outside 6–10 digits. **Never** hard-enforces 8.
+    public static func accountNumber(_ s: String) -> FieldCheck {
+        let raw = s.trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else { return .ok }
+        let d = s.filter(\.isNumber)
+        return (d.count == raw.count && (6...10).contains(d.count)) ? .ok
+             : .suspect("an account number is usually 8 digits")
+    }
+
+    /// SWIFT / BIC — suspect unless 8 or 11 alphanumeric characters. Empty ⇒ ok.
+    public static func swift(_ s: String) -> FieldCheck {
+        let raw = s.trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else { return .ok }
+        let alnum = raw.allSatisfy { $0.isLetter || $0.isNumber }
+        return (alnum && (raw.count == 8 || raw.count == 11)) ? .ok
+             : .suspect("a SWIFT/BIC is 8 or 11 letters/digits")
+    }
+
+    /// IBAN — **soft length/format only** (no checksum): 2 letters + 2 digits + up to 30 alphanumerics,
+    /// total 15–34. Empty ⇒ ok.
+    public static func iban(_ s: String) -> FieldCheck {
+        let raw = s.replacingOccurrences(of: " ", with: "").trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else { return .ok }
+        let upper = raw.uppercased()
+        let chars = Array(upper)
+        let shapeOK = (15...34).contains(chars.count)
+            && chars.allSatisfy { $0.isLetter || $0.isNumber }
+            && chars.prefix(2).allSatisfy { $0.isLetter }
+            && chars.dropFirst(2).prefix(2).allSatisfy { $0.isNumber }
+        return shapeOK ? .ok : .suspect("doesn’t look like a valid IBAN")
+    }
+
+    /// PIN — suspect if it contains non-digits. Empty ⇒ ok. (Length is intentionally unconstrained.)
+    public static func pin(_ s: String) -> FieldCheck {
+        let raw = s.trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty else { return .ok }
+        return raw.allSatisfy(\.isNumber) ? .ok : .suspect("a PIN is digits only")
+    }
+
+    /// Last 4 digits of an account number — the cleartext list-row hint (non-secret, mirrors a card's
+    /// last-4). `""` if there are no digits.
+    public static func accountLast4(_ accountNumber: String) -> String {
+        let d = accountNumber.filter(\.isNumber)
+        return d.count >= 4 ? String(d.suffix(4)) : d
+    }
+}

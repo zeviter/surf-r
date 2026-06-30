@@ -12,6 +12,7 @@ public enum VaultItemType {
     public static let secureNote = "secureNote"   // non-login catch-all (host "sn"); not audited/filled
     public static let payment = "payment"         // LastPass NoteType:Credit Card (typed vault TV-1)
     public static let address = "address"         // LastPass NoteType:Address (typed vault TV-1)
+    public static let bankAccount = "bankAccount" // LastPass NoteType:Bank Account (typed vault TV-2c)
     public static let passkey = "passkey"         // reserved (v2)
 }
 
@@ -45,6 +46,11 @@ public struct StoredItem: Equatable, Sendable, Identifiable {
     /// items leave them `nil`. Disclosed in vault-spec §13.
     public var last4: String?
     public var cardNetwork: String?
+    /// **Bank-account cleartext hint** (TV-2c): the last-4 of the account number, mirroring `last4` for
+    /// cards — lets the Bank list row render "•••• 1234" with **no decryption**. `nil` until derived/
+    /// backfilled; non-bank items leave it `nil`. The full account number / IBAN / PIN stay
+    /// encrypted-payload-only. Disclosed in vault-spec §13.
+    public var accountLast4: String?
 
     public init(id: UUID = UUID(),
                 type: String = "login",
@@ -55,7 +61,8 @@ public struct StoredItem: Equatable, Sendable, Identifiable {
                 hosts: [Host] = [],
                 healthFlags: Int = 0,
                 last4: String? = nil,
-                cardNetwork: String? = nil) {
+                cardNetwork: String? = nil,
+                accountLast4: String? = nil) {
         self.id = id
         self.type = type
         self.title = title
@@ -66,6 +73,7 @@ public struct StoredItem: Equatable, Sendable, Identifiable {
         self.healthFlags = healthFlags
         self.last4 = last4
         self.cardNetwork = cardNetwork
+        self.accountLast4 = accountLast4
     }
 
     /// Only login items are autofilled + audited (vault-spec §7/§10). Non-login items (e.g. imported
@@ -284,6 +292,15 @@ public final class VaultStore: Sendable {
         }
     }
 
+    /// Set a bank-account item's cleartext hint (account last-4) without re-encrypting the payload — used
+    /// by the one-time backfill of already-migrated bank accounts. Derived, non-secret (TV-2c).
+    public func setBankAccountHint(accountLast4: String?, forItemID id: UUID) async throws {
+        try await dbQueue.write { db in
+            try db.execute(sql: "UPDATE items SET account_last4 = ? WHERE id = ?",
+                           arguments: [accountLast4, id.uuidString])
+        }
+    }
+
     /// Drop every reuse token (without touching `health_flags`). Used when the persisted audit-key
     /// self-check no longer matches — the cache is rebuilt from scratch under the live key.
     public func clearAuditTokens() async throws {
@@ -332,7 +349,8 @@ public final class VaultStore: Sendable {
             hosts: hostRows.map { Host(host: $0.host, isPrimary: $0.isPrimary) },
             healthFlags: row.healthFlags,
             last4: row.last4,
-            cardNetwork: row.cardNetwork
+            cardNetwork: row.cardNetwork,
+            accountLast4: row.accountLast4
         )
     }
 
@@ -422,6 +440,14 @@ public final class VaultStore: Sendable {
                 t.add(column: "card_network", .text)     // CardNetwork raw value
             }
         }
+        // TV-2c — bank-account list-row cleartext hint. Derived, non-secret (last-4 of the account
+        // number); the full account number + IBAN + PIN stay encrypted-payload-only. Lets the Bank row
+        // render "•••• 1234" without decrypting (zero-decryption-list invariant). Disclosed in §13.
+        migrator.registerMigration("v4_bank_account_hint") { db in
+            try db.alter(table: "items") { t in
+                t.add(column: "account_last4", .text)    // 4 digits; nil = not yet derived
+            }
+        }
         return migrator
     }
 
@@ -507,6 +533,7 @@ private struct ItemRow: Codable, FetchableRecord, PersistableRecord {
     var healthFlags: Int
     var last4: String?
     var cardNetwork: String?
+    var accountLast4: String?
 
     enum CodingKeys: String, CodingKey {
         case id, type, title, ciphertext, last4
@@ -515,6 +542,7 @@ private struct ItemRow: Codable, FetchableRecord, PersistableRecord {
         case wrappedItemKey = "wrapped_item_key"
         case healthFlags = "health_flags"
         case cardNetwork = "card_network"
+        case accountLast4 = "account_last4"
     }
 
     init(_ item: StoredItem) {
@@ -528,6 +556,7 @@ private struct ItemRow: Codable, FetchableRecord, PersistableRecord {
         healthFlags = item.healthFlags
         last4 = item.last4
         cardNetwork = item.cardNetwork
+        accountLast4 = item.accountLast4
     }
 }
 

@@ -68,4 +68,59 @@ final class FieldValidationTests: XCTestCase {
         XCTAssertEqual(CardDetection.grouped("4111-1111-111"), "4111 1111 111")
         XCTAssertEqual(CardDetection.grouped(""), "")
     }
+
+    // MARK: - Bank account (TV-2c) — soft validators
+
+    func test_bank_sortCode() {
+        XCTAssertEqual(BankValidation.sortCode("200000"), .ok)
+        XCTAssertEqual(BankValidation.sortCode("20-00-00"), .ok)            // separators ignored
+        XCTAssertEqual(BankValidation.sortCode(""), .ok)                    // empty never nags
+        XCTAssertTrue(BankValidation.sortCode("2000").isSuspect)            // too short
+        XCTAssertTrue(BankValidation.sortCode("abcdef").isSuspect)
+    }
+
+    func test_bank_formatSortCode() {
+        XCTAssertEqual(BankValidation.formatSortCode("200000"), "20-00-00")
+        XCTAssertEqual(BankValidation.formatSortCode("20-00-00"), "20-00-00")  // already grouped → stable
+        XCTAssertEqual(BankValidation.formatSortCode("junk"), "junk")          // non-6-digit kept (never wiped)
+    }
+
+    func test_bank_accountNumber() {
+        XCTAssertEqual(BankValidation.accountNumber("12345678"), .ok)      // UK 8-digit
+        XCTAssertEqual(BankValidation.accountNumber("123456"), .ok)        // 6 ok (overseas vary)
+        XCTAssertEqual(BankValidation.accountNumber("1234567890"), .ok)    // 10 ok
+        XCTAssertEqual(BankValidation.accountNumber(""), .ok)
+        XCTAssertTrue(BankValidation.accountNumber("12345").isSuspect)     // too short
+        XCTAssertTrue(BankValidation.accountNumber("12345678901").isSuspect) // too long
+        XCTAssertTrue(BankValidation.accountNumber("12ab5678").isSuspect)  // non-digit
+    }
+
+    func test_bank_swift() {
+        XCTAssertEqual(BankValidation.swift("BUKBGB22"), .ok)              // 8
+        XCTAssertEqual(BankValidation.swift("BUKBGB22XXX"), .ok)           // 11
+        XCTAssertEqual(BankValidation.swift(""), .ok)
+        XCTAssertTrue(BankValidation.swift("BUKB").isSuspect)             // wrong length
+        XCTAssertTrue(BankValidation.swift("BUKB-GB22").isSuspect)        // non-alphanumeric
+    }
+
+    func test_bank_iban() {
+        XCTAssertEqual(BankValidation.iban("GB29NWBK60161331926819"), .ok)
+        XCTAssertEqual(BankValidation.iban("GB29 NWBK 6016 1331 9268 19"), .ok)   // spaces ignored
+        XCTAssertEqual(BankValidation.iban(""), .ok)
+        XCTAssertTrue(BankValidation.iban("GB").isSuspect)                        // too short
+        XCTAssertTrue(BankValidation.iban("1229NWBK60161331926819").isSuspect)    // doesn't start with 2 letters
+    }
+
+    func test_bank_pin() {
+        XCTAssertEqual(BankValidation.pin("1234"), .ok)
+        XCTAssertEqual(BankValidation.pin(""), .ok)
+        XCTAssertTrue(BankValidation.pin("12a4").isSuspect)
+    }
+
+    func test_bank_accountLast4() {
+        XCTAssertEqual(BankValidation.accountLast4("12345678"), "5678")
+        XCTAssertEqual(BankValidation.accountLast4("12-34-56-78"), "5678")   // digits only
+        XCTAssertEqual(BankValidation.accountLast4("12"), "12")              // fewer than 4 → all digits
+        XCTAssertEqual(BankValidation.accountLast4("junk"), "")
+    }
 }

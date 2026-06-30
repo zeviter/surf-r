@@ -56,36 +56,40 @@ struct VaultListView: View {
     /// The four typed-vault segments (WF-12). Each maps to a `VaultItemType`; the list source, search
     /// prompt, empty message, and row glyph follow the selection.
     private enum Segment: String, CaseIterable, Identifiable {
-        case passwords, notes, addresses, payment
+        case passwords, notes, addresses, payment, bank
         var id: String { rawValue }
         var title: String {
             switch self {
             case .passwords: return "Passwords"; case .notes: return "Notes"
-            case .addresses: return "Addresses"; case .payment: return "Payment"
+            case .addresses: return "Addresses"; case .payment: return "Payment"; case .bank: return "Bank"
             }
         }
         var type: String {
             switch self {
             case .passwords: return VaultItemType.login;   case .notes: return VaultItemType.secureNote
             case .addresses: return VaultItemType.address; case .payment: return VaultItemType.payment
+            case .bank: return VaultItemType.bankAccount
             }
         }
         var rowGlyph: String {
             switch self {
             case .passwords: return ""; case .notes: return "note.text"
             case .addresses: return "mappin.and.ellipse"; case .payment: return "creditcard"
+            case .bank: return "building.columns"
             }
         }
         var emptyMessage: String {
             switch self {
             case .passwords: return "No logins yet"; case .notes: return "No secure notes yet"
             case .addresses: return "No addresses yet"; case .payment: return "No payment methods yet"
+            case .bank: return "No bank accounts yet"
             }
         }
         var searchPrompt: String {
             switch self {
             case .passwords: return "Search logins"; case .notes: return "Search notes"
             case .addresses: return "Search addresses"; case .payment: return "Search cards"
+            case .bank: return "Search bank accounts"
             }
         }
         static func from(type: String) -> Segment { Segment.allCases.first { $0.type == type } ?? .passwords }
@@ -184,10 +188,11 @@ struct VaultListView: View {
                             onSelect: { choice in
                                 showTypePicker = false
                                 switch choice {
-                                case .login:   nav.push(.editLogin(nil))
-                                case .note:    nav.push(.editNote(nil))
-                                case .address: nav.push(.editAddress(nil))
-                                case .payment: nav.push(.editPayment(nil))
+                                case .login:       nav.push(.editLogin(nil))
+                                case .note:        nav.push(.editNote(nil))
+                                case .address:     nav.push(.editAddress(nil))
+                                case .payment:     nav.push(.editPayment(nil))
+                                case .bankAccount: nav.push(.editBankAccount(nil))
                                 }
                             },
                             onCancel: { showTypePicker = false }
@@ -211,6 +216,8 @@ struct VaultListView: View {
             detailScaffold { AddressEditView(existing: lookup(id)) { nav.pop() } }
         case .editPayment(let id):
             detailScaffold { PaymentEditView(existing: lookup(id)) { nav.pop() } }
+        case .editBankAccount(let id):
+            detailScaffold { BankAccountEditView(existing: lookup(id)) { nav.pop() } }
         case .securityCheck:
             detailScaffold { SecurityCheckView(query: $scQuery, onOpenItem: { nav.push(.editLogin($0)) }) }
         }
@@ -231,10 +238,12 @@ struct VaultListView: View {
                     AddressDetailView(item: item, onEdit: { nav.push(.editAddress(id)) }, onDelete: del)
                 case VaultItemType.payment:
                     PaymentDetailView(item: item, onEdit: { nav.push(.editPayment(id)) }, onDelete: del)
+                case VaultItemType.bankAccount:
+                    BankAccountDetailView(item: item, onEdit: { nav.push(.editBankAccount(id)) }, onDelete: del)
                 case VaultItemType.login:
                     VaultItemView(item: item, onEdit: { nav.push(.editLogin(id)) }, onDelete: del)
                 default:
-                    TypedInterimView(item: item, onDelete: del)   // unknown/future type (e.g. Bank Account, TV-2c)
+                    TypedInterimView(item: item, onDelete: del)   // defensive: only a reserved/future type (e.g. passkey)
                 }
             }
         } else { fallbackToList }
@@ -332,6 +341,13 @@ struct VaultListView: View {
                     secondary: paymentRowSubtitle(item),
                     leadingSystemImage: segment.rowGlyph,
                     onOpen: { nav.push(.detail(item.id)) }) { EmptyView() }
+        case .bank:
+            // Glyph + name + "•••• account-last4" — from the cleartext hint; NO payload decrypt (WF-12).
+            PageRow(host: "",
+                    primary: item.title.isEmpty ? "Bank account" : item.title,
+                    secondary: bankRowSubtitle(item),
+                    leadingSystemImage: segment.rowGlyph,
+                    onOpen: { nav.push(.detail(item.id)) }) { EmptyView() }
         default:
             PageRow(host: "",
                     primary: item.title.isEmpty ? "Untitled" : item.title,
@@ -348,6 +364,12 @@ struct VaultListView: View {
         let parts = [net == .unknown ? nil : net.displayName,
                      last4.isEmpty ? nil : "•••• \(last4)"].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: "  ")
+    }
+
+    /// Bank row subtitle from the **cleartext** account-last-4 hint — never decrypts the payload (TV-2c).
+    private func bankRowSubtitle(_ item: StoredItem) -> String? {
+        let last4 = item.accountLast4 ?? ""
+        return last4.isEmpty ? nil : "•••• \(last4)"
     }
 
     /// Visible, stateful security controls (per review): Touch ID status/toggle in the green/amber

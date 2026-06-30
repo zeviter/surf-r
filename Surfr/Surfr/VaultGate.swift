@@ -236,6 +236,7 @@ final class VaultGate: ObservableObject {
             await loadItems()
             await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
             await backfillPaymentHints()           // TV-2b: derive cleartext last-4/network for cards
+            await backfillBankAccountHints()       // TV-2c: derive cleartext account-last-4 for bank accounts
             return true
         } catch {
             lastError = "Incorrect master password."
@@ -262,6 +263,7 @@ final class VaultGate: ObservableObject {
             await loadItems()
             await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
             await backfillPaymentHints()           // TV-2b: derive cleartext last-4/network for cards
+            await backfillBankAccountHints()       // TV-2c: derive cleartext account-last-4 for bank accounts
             return true
         } catch {
             lastError = "Recovery code not recognized."
@@ -393,6 +395,17 @@ final class VaultGate: ObservableObject {
         }
     }
 
+    /// Decrypt a `bankAccount`-typed item's structured payload (TV-2c). Same one-at-a-time,
+    /// zero-after-use discipline as `decryptPayment`.
+    func decryptBankAccount(_ item: StoredItem) -> BankAccountPayload? {
+        guard phase == .unlocked else { return nil }
+        return try? lock.withVaultKey { key in
+            var data = try VaultCrypto.decryptItem(item.sealed, vaultKey: key)
+            defer { data.resetBytes(in: 0..<data.count) }
+            return try BankAccountPayload.decoded(from: data)
+        }
+    }
+
     // MARK: - Save-on-submit (Slice 8b)
 
     private static let neverSaveKey = "SurfrVaultNeverSaveDomains"
@@ -477,7 +490,8 @@ final class VaultGate: ObservableObject {
     /// payment hint (last-4 + network), and refresh. Non-login items carry **no** health flags and are
     /// **not** audited.
     func saveTypedItem(id: UUID?, type: String, title: String, payloadData: Data,
-                       hosts: [SurfrCore.Host], last4: String? = nil, cardNetwork: String? = nil) async {
+                       hosts: [SurfrCore.Host], last4: String? = nil, cardNetwork: String? = nil,
+                       accountLast4: String? = nil) async {
         guard let store, phase == .unlocked else { return }
         do {
             var data = payloadData
@@ -488,7 +502,7 @@ final class VaultGate: ObservableObject {
             let item = StoredItem(id: id ?? UUID(), type: type, title: title,
                                   createdAt: existing?.createdAt ?? now, modifiedAt: now,
                                   sealed: sealed, hosts: hosts, healthFlags: 0,
-                                  last4: last4, cardNetwork: cardNetwork)
+                                  last4: last4, cardNetwork: cardNetwork, accountLast4: accountLast4)
             try await store.upsert(item)
             await loadItems()
         } catch {
@@ -527,6 +541,36 @@ final class VaultGate: ObservableObject {
             guard let payload = decryptPayment(item) else { continue }
             let hint = Self.paymentHint(forNumber: payload.number)
             try? await store.setPaymentHint(last4: hint.last4, cardNetwork: hint.network, forItemID: item.id)
+            changed = true
+        }
+        if changed { items = (try? await store.allItems()) ?? items }
+    }
+
+    // MARK: - Bank Account (TV-2c)
+
+    /// Create/update a bank-account item: derive its cleartext account-last-4 hint from the entered
+    /// account number and store it alongside the encrypted `BankAccountPayload`. The full account number,
+    /// IBAN, and PIN stay encrypted-payload-only.
+    func saveBankAccount(id: UUID?, title: String, payload: BankAccountPayload) async {
+        guard let data = try? payload.encoded() else { lastError = "Could not save the bank account."; return }
+        let last4 = BankValidation.accountLast4(payload.accountNumber)
+        await saveTypedItem(id: id, type: VaultItemType.bankAccount, title: title,
+                            payloadData: data, hosts: [], accountLast4: last4)
+    }
+
+    /// One-time, idempotent backfill of the cleartext account-last-4 hint for already-migrated bank
+    /// accounts (those created by the secureNote→bankAccount re-classification, which had no hint). Walks
+    /// ONLY bankAccount items whose `accountLast4` is still nil — decrypt one at a time → derive last-4 →
+    /// store the hint → zero plaintext. Naturally guarded (once set, the item is skipped), so a re-run is
+    /// a no-op and new bank accounts (saved with a hint already) are never touched. Mirrors
+    /// `backfillPaymentHints`.
+    func backfillBankAccountHints() async {
+        guard let store, phase == .unlocked else { return }
+        var changed = false
+        for item in items where item.type == VaultItemType.bankAccount && item.accountLast4 == nil {
+            guard let payload = decryptBankAccount(item) else { continue }
+            try? await store.setBankAccountHint(accountLast4: BankValidation.accountLast4(payload.accountNumber),
+                                                forItemID: item.id)
             changed = true
         }
         if changed { items = (try? await store.allItems()) ?? items }
@@ -650,15 +694,23 @@ final class VaultGate: ObservableObject {
     // MARK: - Typed vault (TV-1) — re-classify imported secure notes into payment / address
 
     private static let typedReclassifiedKey = "SurfrTypedVaultReclassifiedV1"
+    /// TV-2c bumped the classifier (added Bank Account). A vault already migrated under V1 must re-walk
+    /// its `secureNote` items **once more** so an existing `NoteType:Bank Account` note is promoted off the
+    /// catch-all. The walk is idempotent (already-typed items aren't `secureNote`), so the second pass only
+    /// touches the newly-classifiable notes.
+    static let typedReclassifiedKeyV2 = "SurfrTypedVaultReclassifiedV2"
 
-    /// One-time, guarded migration of the **existing** Slice-9 `secureNote` items (runs once via a
-    /// UserDefaults marker, so a second launch doesn't re-migrate). New imports are handled by the
-    /// forced `reclassifyTypedItems()` call in the import path.
+    /// One-time, guarded migration of the **existing** `secureNote` items into the typed shapes (runs once
+    /// per classifier version via UserDefaults markers, so a steady-state launch doesn't re-migrate). New
+    /// imports are handled by the forced `reclassifyTypedItems()` call in the import path.
     func reclassifyTypedItemsIfNeeded() async {
-        guard phase == .unlocked,
-              !UserDefaults.standard.bool(forKey: Self.typedReclassifiedKey) else { return }
+        guard phase == .unlocked else { return }
+        let v1Done = UserDefaults.standard.bool(forKey: Self.typedReclassifiedKey)
+        let v2Done = UserDefaults.standard.bool(forKey: Self.typedReclassifiedKeyV2)
+        guard !v1Done || !v2Done else { return }
         await reclassifyTypedItems()
         UserDefaults.standard.set(true, forKey: Self.typedReclassifiedKey)
+        UserDefaults.standard.set(true, forKey: Self.typedReclassifiedKeyV2)
         #if DEBUG
         dumpTypedItemsForReview()   // on-device DoD check (redacted; runs once after the migration)
         #endif
@@ -681,6 +733,10 @@ final class VaultGate: ObservableObject {
             case VaultItemType.address:
                 let a = decryptAddress(item)
                 print("[TypedVault] address ‘\(item.title)’ name=\(s(a?.firstName ?? a?.lastName)) line1=\(s(a?.line1)) city=\(s(a?.city)) county=\(s(a?.county)) state=\(s(a?.stateProvince)) postal=\(s(a?.postalCode)) phone=\(s(a?.phone)) email=\(s(a?.email))")
+            case VaultItemType.bankAccount:
+                let b = decryptBankAccount(item)
+                // Redacted: account number / IBAN / PIN are NEVER printed — only set/unset + the cleartext last-4 hint.
+                print("[TypedVault] bankAccount ‘\(item.title)’ bank=\(s(b?.bankName)) type=\(s(b?.accountType)) sort=\(s(b?.sortCode)) acct=\(s(b?.accountNumber)) iban=\(s(b?.iban)) pin=\(s(b?.pin)) swift=\(s(b?.swift)) hint=••••\(item.accountLast4 ?? "nil")")
             default:
                 print("[TypedVault] \(item.type) ‘\(item.title)’")
             }
@@ -703,6 +759,8 @@ final class VaultGate: ObservableObject {
                 if await reencodeTyped(item, type: VaultItemType.payment, data: try? p.encoded()) { changed = true }
             case .address(let a):
                 if await reencodeTyped(item, type: VaultItemType.address, data: try? a.encoded()) { changed = true }
+            case .bankAccount(let b):
+                if await reencodeTyped(item, type: VaultItemType.bankAccount, data: try? b.encoded()) { changed = true }
             case .secureNote:
                 break   // already the correct type; leave the body untouched
             }
@@ -789,6 +847,7 @@ final class VaultGate: ObservableObject {
             await loadItems()
             await reclassifyTypedItems()          // TV-1: refine freshly-imported notes → payment/address
             await backfillPaymentHints()          // TV-2b: cleartext last-4/network for new cards
+            await backfillBankAccountHints()      // TV-2c: cleartext account-last-4 for new bank accounts
             await runSecurityCheck()              // key + flag the freshly imported items (backfill)
             vaultLog("import: \(toStore.count) added, \(skippedDuplicates) exact-duplicate(s) skipped")
             return ImportSummary(imported: toStore.count, skippedDuplicates: skippedDuplicates, failed: false)
@@ -991,6 +1050,7 @@ final class VaultGate: ObservableObject {
             await loadItems()
             await reclassifyTypedItemsIfNeeded()   // TV-1: one-time migration of imported notes
             await backfillPaymentHints()           // TV-2b: derive cleartext last-4/network for cards
+            await backfillBankAccountHints()       // TV-2c: derive cleartext account-last-4 for bank accounts
             vaultLog("biometric unlock succeeded")
             return true
         } catch BiometricFailure.userCancelled {

@@ -39,7 +39,7 @@ Status: ✓ done · ◐ partial · ☐ not started.
 | F7 | Organised history | ✓ | GRDB `HistoryStore` (indexed, substring search, date-grouped, 365-day auto-prune, local-only); full-page history surface. (`HistoryStore.swift`, `HistoryView.swift`.) |
 | F8 | Omnibox shortcut | ✓ | `⌘L` summons the spotlight overlay (or focuses the permanent new-tab box); URL-vs-DuckDuckGo parser; `Enter` = current tab, `⌘Enter` = new tab. (`Spotlight.swift`, `Omnibox.swift`.) |
 | F1 | IP obfuscation / routing | ☐ | Planned: per-app `WKWebsiteDataStore.proxyConfigurations` → SOCKS5 (Tor / self-hosted WireGuard) + WebRTC/DNS leak hardening. Not started. |
-| F5 | Password manager (vault + system autofill) | ◑ | **Largely built** (see `docs/vault-spec.md` §11): CryptoKit/Argon2id vault, master + Secure-Enclave biometric unlock, Recovery Kit, list/detail/add-edit, CSV import, generator, TOTP (+ Google Authenticator migration), **in-browser fill + save** (Slices 1–8e), and the **Security Check** — local weak/reused/2FA-available + junk-host hygiene via a keyed-token zero-decryption audit (Slice 9). Now spans **four item types** — login · payment · address · secure note — with LastPass `NoteType` classification + a **segmented vault list and full Secure Note / Address / Payment surfaces** (masked card number/CVV with biometric reveal; **typed vault TV-1 + TV-2 done**; see `docs/typed-vault-wireframes.md`). **Remaining:** typed-vault TV-3 (card/address web-fill, pairs with Slice 10); Slice 10 system AutoFill extension (`ASCredentialProviderExtension`, Apple-gated); passkeys are v2. |
+| F5 | Password manager (vault + system autofill) | ◑ | **Largely built** (see `docs/vault-spec.md` §11): CryptoKit/Argon2id vault, master + Secure-Enclave biometric unlock, Recovery Kit, list/detail/add-edit, CSV import, generator, TOTP (+ Google Authenticator migration), **in-browser fill + save** (Slices 1–8e), and the **Security Check** — local weak/reused/2FA-available + junk-host hygiene via a keyed-token zero-decryption audit (Slice 9). Now spans **five item types** — login · payment · address · secure note · **bank account** — with LastPass `NoteType` classification + a **segmented vault list and full Secure Note / Address / Payment / Bank Account surfaces** (masked card number/CVV **and bank account number/IBAN/PIN** with biometric reveal; **typed vault TV-1 + TV-2 done, all structured types built**; see `docs/typed-vault-wireframes.md`). **Remaining:** typed-vault TV-3 (card/address web-fill, pairs with Slice 10); Slice 10 system AutoFill extension (`ASCredentialProviderExtension`, Apple-gated); passkeys are v2. |
 | F9 | Incognito mode (no-local-trace session, trust suspended) | ☐ | **MVP/v1 — scope only, design before slicing.** surf-r is already ephemeral-by-default for web state, so incognito is *not* another ephemeral toggle: it additionally leaves **no local trace** (no History / Downloads-history / favicon-cache writes, no bookmark-capture prompts) and **suspends trust** (trusted domains stay `nonPersistent` — no login/SSO persistence), with a clear, honest active-state indicator. Last-v1 surface alongside anti-fingerprinting (§6). |
 | F10 | Anti-fingerprinting (two modes: Standard / Randomized) | ☐ | **v1 — designed, not built; lands after vault Slice 10.** Baseline = present as **stock Safari on WebKit** (large crowd) + ephemeral-by-default + engage WebKit's native AFP/ITP. **Standard** (default) adds zero entropy; **Randomized** (opt-in) injects deterministic, bucketed farbling on canvas/WebGL/WebAudio + high-entropy clamps in the existing isolated `WKContentWorld`, seeded per (registrable domain × visit session), with a trusted-site stable-fingerprint exemption. Honest tradeoff: Randomized can *increase* uniqueness. Full design + build tiers (FP-0/1/2) in §6. |
 
@@ -204,14 +204,16 @@ page, drag-reorderable rail.
 - **Security Check done** (vault-spec Slice 9 / WF-9): local weak/reused/2FA-available surface + junk-host
   hygiene, via a keyed-token (HMAC over an HKDF audit key) **zero-decryption** audit cache + a bundled
   **2FA Directory** TOTP snapshot (MIT, no runtime network). Pure `AuditEngine` in `SurfrCore`.
-- **Typed vault TV-1 + TV-2a done** (`docs/typed-vault-wireframes.md`): four item types (login · payment ·
-  address · secure note) under the same AES-256-GCM envelope (no crypto change); pure `TypedNoteParser` for
-  LastPass `NoteType` classification + lossless field extraction + one-time re-classification (TV-1); then
-  the **segmented vault list, type picker, and per-type detail/edit/copy** with the inherited ESC/back nav:
-  Secure Note + Address (TV-2a) and **Payment** (TV-2b — masked card-number/CVV with biometric reveal/copy,
-  local prefix card-network detection, and a cleartext last-4/network hint for zero-decryption Payment
-  rows). The zero-decryption list invariant holds across all four segments. **Remaining:** **TV-3**
-  (card/address web-fill, pairs with Slice 10); optional TV-2c (first-class Bank Account).
+- **Typed vault TV-1 + TV-2 done** (`docs/typed-vault-wireframes.md`): **five** item types (login · payment ·
+  address · secure note · **bank account**) under the same AES-256-GCM envelope (no crypto change); pure
+  `TypedNoteParser` for LastPass `NoteType` classification + lossless field extraction + one-time
+  re-classification (TV-1); then the **segmented vault list, type picker, and per-type detail/edit/copy** with
+  the inherited ESC/back nav: Secure Note + Address (TV-2a), **Payment** (TV-2b — masked card-number/CVV with
+  biometric reveal/copy, local prefix card-network detection, and a cleartext last-4/network hint for
+  zero-decryption Payment rows), and **Bank Account** (TV-2c — masked account number/IBAN/PIN with biometric
+  reveal/copy, "Routing Number"→Sort code parse, and a cleartext account-last-4 hint for zero-decryption Bank
+  rows; soft `BankValidation`). The zero-decryption list invariant holds across all **five** segments. **The
+  typed vault is fully built. Remaining:** **TV-3** (card/address web-fill, pairs with Slice 10).
 - **Remaining (Slice 10):** `ASCredentialProviderExtension` targets (iOS + macOS); QuickType + full UI;
   passkeys (`ASPasskeyCredential`, iOS 17+). Fills detected login fields/QuickType/Safari, **not** the
   generic context-menu on arbitrary text fields (Apple-private) — as with all third-party managers.

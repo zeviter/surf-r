@@ -85,8 +85,40 @@ public struct AddressPayload: Codable, Equatable, Sendable {
     }
 }
 
+/// Bank Account (LastPass `NoteType:Bank Account`, typed vault TV-2c). `accountNumber`, `iban`, and
+/// `pin` are **sensitive** — masked + biometric reveal/copy, encrypted-payload-only (the card-number/CVV
+/// treatment). `sortCode` (LastPass labels it "Routing Number"; surf-r shows "Sort code") and `swift`
+/// (BIC) are **low-sensitivity** and shown plainly: a sort code is not secret and a BIC is public.
+public struct BankAccountPayload: Codable, Equatable, Sendable {
+    public var bankName: String
+    public var accountType: String
+    public var sortCode: String          // LastPass "Routing Number" → shown as "Sort code"
+    public var accountNumber: String     // SENSITIVE
+    public var swift: String             // BIC — public, shown plainly
+    public var iban: String              // SENSITIVE
+    public var pin: String               // SENSITIVE
+    public var branchAddress: String
+    public var branchPhone: String
+    public var notes: String
+    public var rawBody: String           // the full original note body — lossless
+
+    public init(bankName: String = "", accountType: String = "", sortCode: String = "",
+                accountNumber: String = "", swift: String = "", iban: String = "", pin: String = "",
+                branchAddress: String = "", branchPhone: String = "", notes: String = "", rawBody: String = "") {
+        self.bankName = bankName; self.accountType = accountType; self.sortCode = sortCode
+        self.accountNumber = accountNumber; self.swift = swift; self.iban = iban; self.pin = pin
+        self.branchAddress = branchAddress; self.branchPhone = branchPhone
+        self.notes = notes; self.rawBody = rawBody
+    }
+
+    public func encoded() throws -> Data { try encodeTypedPayload(self) }
+    public static func decoded(from data: Data) throws -> BankAccountPayload {
+        try JSONDecoder().decode(BankAccountPayload.self, from: data)
+    }
+}
+
 /// Secure Note — title (cleartext metadata) + free-text body (raw original, preserved verbatim). The
-/// catch-all for everything that isn't a login / payment / address (incl. the long tail: Bank Account,
+/// catch-all for everything that isn't a login / payment / address / bank account (incl. the long tail:
 /// Passport, Wi-Fi, …). Misfiling is worse than generic.
 public struct SecureNotePayload: Codable, Equatable, Sendable {
     public var title: String
@@ -106,6 +138,7 @@ public struct SecureNotePayload: Codable, Equatable, Sendable {
 public enum TypedNoteClassification: Equatable, Sendable {
     case payment(PaymentPayload)
     case address(AddressPayload)
+    case bankAccount(BankAccountPayload)
     case secureNote(SecureNotePayload)
 }
 
@@ -138,9 +171,10 @@ public enum TypedNoteParser {
         }
 
         switch noteType {
-        case "credit card": return .payment(parsePayment(title: title, body: body, fields: fields))
-        case "address":     return .address(parseAddress(title: title, body: body, fields: fields))
-        default:            return .secureNote(SecureNotePayload(title: title, body: body))
+        case "credit card":  return .payment(parsePayment(title: title, body: body, fields: fields))
+        case "address":      return .address(parseAddress(title: title, body: body, fields: fields))
+        case "bank account": return .bankAccount(parseBankAccount(body: body, fields: fields))
+        default:             return .secureNote(SecureNotePayload(title: title, body: body))
         }
     }
 
@@ -189,6 +223,26 @@ public enum TypedNoteParser {
             phone:         phone,
             phoneCountry:  phoneCountry,
             email:         fields["email address"] ?? "",
+            rawBody:       body
+        )
+    }
+
+    /// Bank Account (LastPass `NoteType:Bank Account`, TV-2c). Map the real LastPass labels into discrete
+    /// fields; keep the full body in `rawBody`. The user uses LastPass's **"Routing Number"** line as the
+    /// sort code, so it maps to `sortCode` (surf-r labels it "Sort code"). `accountNumber` / `iban` / `pin`
+    /// are sensitive (masked + biometric reveal in the UI) but parse like any other line here.
+    private static func parseBankAccount(body: String, fields: [String: String]) -> BankAccountPayload {
+        BankAccountPayload(
+            bankName:      fields["bank name"] ?? "",
+            accountType:   fields["account type"] ?? "",
+            sortCode:      fields["routing number"] ?? "",   // user's sort code lives in the Routing Number line
+            accountNumber: fields["account number"] ?? "",
+            swift:         fields["swift code"] ?? "",
+            iban:          fields["iban number"] ?? "",
+            pin:           fields["pin"] ?? "",
+            branchAddress: fields["branch address"] ?? "",
+            branchPhone:   fields["branch phone"] ?? "",
+            notes:         fields["notes"] ?? "",
             rawBody:       body
         )
     }

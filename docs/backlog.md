@@ -23,6 +23,12 @@
   extension).**
 - ☐ **Password manager — system AutoFill extension (F5, vault Slice 10).** `ASCredentialProviderExtension`
   (+ passkeys) so credentials fill across all apps; relocate `LoginPayload` to `SurfrCore`. Apple-gated.
+  - ☐ **`LoginPayload` still uses a bare `JSONEncoder()` (re-seal churn).** The TV typed payloads
+    (payment/address/secureNote/bankAccount) encode via the deterministic `.sortedKeys`
+    `encodeTypedPayload` helper, but `LoginPayload` (still in the app target) does not — so a no-op
+    decrypt→re-encode→re-seal of an unchanged login can yield different ciphertext. Apply the same
+    `.sortedKeys` treatment **when `LoginPayload` relocates to `SurfrCore`** in this extraction. (Flagged
+    by the TV-2 deterministic-encoding fix; low priority until the move.)
 - ◐ **Typed vault — Secure Notes / Addresses / Payment Methods** (`docs/typed-vault-wireframes.md`,
   WF-11+). **TV-1 done** (data model + LastPass `NoteType` parsing + one-time re-classification).
   **TV-2a done** — segmented vault list (WF-12) + type picker (WF-13, Payment disabled) + Secure Note &
@@ -34,9 +40,15 @@
   field validation + structured inputs (payment expiry/valid-from month+year pickers, read-only prefix
   network, digit-grouped card number with soft Luhn, digit CVV; address **country picker**): GUIDES +
   WARNS in amber, **never blocks save**, existing malformed imports stay openable/editable (pure
-  `CardValidation` / `FieldCheck` in `SurfrCore`). **TV-2c** (optional) — first-class Bank Account
-  (validation pre-shape recorded in the wireframes spec), else long-tail items stay generic Secure Notes.
-  **TV-3** — card/address click-to-fill (WF-18); **pairs with Slice 10**, sharing the `SurfrCore` extraction.
+  `CardValidation` / `FieldCheck` in `SurfrCore`). **TV-2c done** — first-class **Bank Account** (fifth
+  structured type, modelled on TV-2b Payment): masked **account number / IBAN / PIN** with biometric
+  reveal/copy, **"Routing Number"→Sort code** parse (shown `XX-XX-XX`), low-sensitivity sort code / SWICT
+  shown plainly, cleartext **account-last-4 hint** (`items.account_last4`, derived + backfilled) for
+  zero-decryption Bank rows, fifth "Bank" segment + picker option, soft `BankValidation` (sort code / account
+  number / SWIFT / IBAN-soft / PIN; account-type picker), and a one-time guarded `NoteType:Bank Account`
+  re-classification (V2 marker). **The typed vault is now fully built** (all 5 types: login/note/address/
+  payment/bank). **TV-3** — card/address click-to-fill (WF-18); **pairs with Slice 10**, sharing the
+  `SurfrCore` extraction. **The only remaining vault work is the autofill block: TV-3 + Slice 10.**
   - ☐ **(post-v1) First-class long-tail editors** (Passport / Bank Account / Wi-Fi / SSH Key / SSN …):
     v1 keeps them as generic Secure Notes with the raw body preserved verbatim; structured editors deferred.
   - ☐ **(post-v1) "Convert type" flow** (e.g. note → payment): v1 is create-as-type only; a mis-imported

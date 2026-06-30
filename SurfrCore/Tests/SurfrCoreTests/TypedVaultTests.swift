@@ -40,6 +40,20 @@ final class TypedVaultTests: XCTestCase {
     Gender:Male
     """
 
+    private let bankAccountBody = """
+    NoteType:Bank Account
+    Bank Name:Barclays
+    Account Type:Current
+    Routing Number:20-00-00
+    Account Number:12345678
+    SWIFT Code:BUKBGB22
+    IBAN Number:GB29NWBK60161331926819
+    Pin:1234
+    Branch Address:1 Churchill Place, London
+    Branch Phone:+44 345 734 5345
+    Notes:main account
+    """
+
     // MARK: Classification
 
     func test_classify_creditCard_isPayment() {
@@ -52,6 +66,27 @@ final class TypedVaultTests: XCTestCase {
         else { return XCTFail("expected address") }
     }
 
+    func test_classify_bankAccount_isBankAccount() {
+        guard case .bankAccount = TypedNoteParser.classify(title: "Barclays Current", body: bankAccountBody)
+        else { return XCTFail("expected bankAccount") }
+    }
+
+    func test_bankAccount_extractsEveryField_routingNumberMapsToSortCode() {
+        guard case .bankAccount(let b) = TypedNoteParser.classify(title: "Barclays Current", body: bankAccountBody)
+        else { return XCTFail() }
+        XCTAssertEqual(b.bankName, "Barclays")
+        XCTAssertEqual(b.accountType, "Current")
+        XCTAssertEqual(b.sortCode, "20-00-00")              // LastPass "Routing Number" → sortCode
+        XCTAssertEqual(b.accountNumber, "12345678")
+        XCTAssertEqual(b.swift, "BUKBGB22")
+        XCTAssertEqual(b.iban, "GB29NWBK60161331926819")
+        XCTAssertEqual(b.pin, "1234")
+        XCTAssertEqual(b.branchAddress, "1 Churchill Place, London")
+        XCTAssertEqual(b.branchPhone, "+44 345 734 5345")
+        XCTAssertEqual(b.notes, "main account")
+        XCTAssertEqual(b.rawBody, bankAccountBody)          // lossless
+    }
+
     func test_classify_plainNote_isSecureNote() {
         guard case .secureNote(let n) = TypedNoteParser.classify(title: "Wifi", body: "SSID: home\nPassword: hunter2")
         else { return XCTFail("expected secureNote") }
@@ -62,8 +97,9 @@ final class TypedVaultTests: XCTestCase {
     func test_classify_missingOrGarbledNoteType_isSecureNote_neverMisfiled() {
         // Absent marker.
         guard case .secureNote = TypedNoteParser.classify(title: "x", body: "just some text") else { return XCTFail() }
-        // Garbled / unknown NoteType ⇒ generic note, never mis-typed.
-        guard case .secureNote = TypedNoteParser.classify(title: "x", body: "NoteType:Bank Account\nRouting:123") else { return XCTFail() }
+        // Garbled / unknown NoteType ⇒ generic note, never mis-typed. (Passport is an unhandled long-tail
+        // type; Bank Account is now first-class, so it's covered by its own test below.)
+        guard case .secureNote = TypedNoteParser.classify(title: "x", body: "NoteType:Passport\nNumber:123") else { return XCTFail() }
         guard case .secureNote = TypedNoteParser.classify(title: "x", body: "Notetype :Credit Card\nNumber:1") else { return XCTFail() }
     }
 
@@ -181,5 +217,14 @@ final class TypedVaultTests: XCTestCase {
         let again = try AddressPayload.decoded(from: try a.encoded())
         XCTAssertEqual(a, again)
         XCTAssertNil(again.stateProvince)   // nullability survives the round-trip
+    }
+
+    func test_roundTrip_bankAccountEncodeDecodeStable() throws {
+        guard case .bankAccount(let b) = TypedNoteParser.classify(title: "Barclays", body: bankAccountBody)
+        else { return XCTFail() }
+        let again = try BankAccountPayload.decoded(from: try b.encoded())
+        XCTAssertEqual(b, again)
+        // re-encode is byte-stable for an unchanged value (deterministic .sortedKeys encoding).
+        XCTAssertEqual(try again.encoded(), try b.encoded())
     }
 }

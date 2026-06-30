@@ -42,7 +42,10 @@ decrypted note body's first line.
 | `login` *(existing)* | username, password, notes, totp, urls — unchanged | password entries |
 | `payment` | nickname, cardholderName, number\*, type, expiry, startDate, cvv\*, notes | `NoteType:Credit Card` |
 | `address` | label, firstName, lastName, company, line1, line2, city, county (opt·UK), stateProvince, postalCode, country, phone, email — **each discrete** | `NoteType:Address` |
+| `bankAccount` | bankName, accountType, sortCode (LastPass "Routing Number"), accountNumber\*, swift, iban\*, pin\*, branchAddress, branchPhone, notes | `NoteType:Bank Account` |
 | `secureNote` | title + free-text body (raw original preserved) | all other `NoteType:` + plain notes |
+
+\* (bank) `accountNumber`, `iban`, and `pin` are sensitive — masked, reveal/copy biometric-gated, never in a cleartext column. `sortCode`/`swift` are low-sensitivity and shown plainly.
 
 \* `number` and `cvv` are sensitive — masked, reveal/copy biometric-gated, never in a cleartext column.
 
@@ -340,9 +343,11 @@ list (origin threaded through, same family as the Slice-5 surface-restore fixes)
 - **Zero-decryption list preserved.** Lists render from cleartext metadata (title/host/label + last-4
   + type). Search is title/host/label only. No payload is decrypted to draw or filter a list — the
   Slice-5 property holds across all four segments.
-- **Sensitive data stays encrypted-payload-only.** Card number, CVV, address PII, note bodies never
-  touch a cleartext column. Reveal/copy of card number + CVV is biometric-gated like passwords. The
-  `vault-spec.md` §13 metadata-leak disclosure does **not** grow past title/host/label.
+- **Sensitive data stays encrypted-payload-only.** Card number, CVV, **bank account number / IBAN / PIN**,
+  address PII, note bodies never touch a cleartext column. Reveal/copy of card number + CVV (and the bank
+  account number / IBAN / PIN) is biometric-gated like passwords. The only cleartext display hints are the
+  card **last-4 + network** (TV-2b) and the bank **account last-4** (TV-2c) — derived, non-secret, disclosed
+  in `vault-spec.md` §13; the metadata-leak disclosure does **not** grow past title/host/label + those hints.
 - **Audit + autofill are login-only.** The Slice-9 security check and the login matcher consider
   `type==login` exclusively. Cards/addresses/notes are never weak/reused/2FA-flagged and never offered
   to a login form. (Click-to-fill for cards/addresses is the separate TV-3 path.)
@@ -370,15 +375,24 @@ detection**. TV-3 is the heavy, deferrable web-fill piece.
 | **TV-1** | Data model + type classification + LastPass `NoteType` parsing (payment/address field extraction; everything else → note with raw body). Headless, unit-tested against the real export samples. Re-classify the `secureNote`-marked items from the Slice-9 closeout. | low–med |
 | **TV-2a** ✅ | Segmented vault list (WF-12) + type picker (WF-13, Payment disabled) + Secure Note & Address detail/edit/copy (WF-15/16) + uniform ESC/back nav (WF-19). No payment detail/edit, no web fill. Typed rows are glyph + title (see As-built note). | med |
 | **TV-2b** ✅ | Payment Method detail/edit (WF-17): card-number/CVV masking + biometric reveal/copy (the Slice-5 reveal path), local prefix card-network detection, cleartext last-4/network hint (derived + backfilled) for zero-decryption Payment rows, picker Payment option enabled. | med |
-| **TV-2c** | Bank Account (+ any other first-class long-tail type) detail/edit; otherwise long-tail items stay generic Secure Notes. The generic interim placeholder covers a first-class type until its view ships. | med |
+| **TV-2c** ✅ | Bank Account detail/edit (a fifth first-class structured type, modelled on WF-17 Payment). Other long-tail types stay generic Secure Notes; the generic interim placeholder is now **purely defensive** (no shipped type reaches it — only the reserved `passkey` would). | med |
 
-**Bank Account validation pre-shape (record now; build in TV-2c).** When the Bank Account surface is
-built, apply the **same never-block soft-validation rule** (§10) with these constrained inputs:
-**Sort code** → 6 digits, soft, displayed `XX-XX-XX`; **Account number** → 8 digits (soft); **SWIFT/BIC**
-→ 8 or 11 alphanumeric (soft); **IBAN** → soft length/format warn (no hard validation — country formats
-vary); **PIN** → digits, **sensitive/masked** (biometric reveal, like CVV); **Account type** → picker.
-Free-form: account nickname, holder name, notes. Validators land as pure `SurfrCore` functions alongside
-`CardValidation`. No code now — spec note only.
+**Bank Account (TV-2c as-built).** A **fifth segment** ("Bank", `building.columns` glyph) + a Bank Account
+picker option (WF-13). Detail/edit modelled directly on WF-17 Payment: **`accountNumber` / `iban` / `pin`
+are sensitive** — masked by default (`•••• last4` for the account number from the cleartext hint, `••••` for
+IBAN/PIN), **reveal AND copy biometric-gated** via the exact Slice-5 reveal path (`biometricAuthenticateForReveal`
++ master fallback; honours "Require auth to reveal/copy/fill"), plaintext zeroed on close. **`sortCode`**
+(LastPass labels it "Routing Number"; surf-r shows **"Sort code"**, displayed `XX-XX-XX`) and **`swift`/BIC**
+are low-sensitivity and shown plainly. The cleartext **account-last-4 hint** (`items.account_last4`) is derived
+at save and **backfilled once** for migrated accounts (one-at-a-time decrypt→derive→store→zero), and is the
+only thing the Bank list row reads (zero-decryption invariant). `NoteType:Bank Account` notes are promoted off
+the secureNote catch-all by the classifier + a **one-time guarded re-walk** (a V2 migration marker re-runs the
+idempotent walk once for vaults already migrated under TV-1). **Soft validation (TV-2-VAL, never blocks):**
+**Sort code** → 6 digits (soft, displayed `XX-XX-XX`); **Account number** → soft, 6–10 digits (UK is 8, but
+overseas vary — never hard-enforced); **SWIFT/BIC** → 8 or 11 alphanumeric (soft); **IBAN** → soft length/format
+warn (**no checksum**); **PIN** → digits (soft); **Account type** → **picker** (fixed list + the imported value
+preserved as a selectable tag so an odd import is never trapped). Validators are pure `BankValidation` in
+`SurfrCore` alongside `CardValidation`.
 | **TV-3** | Click-to-fill for cards/addresses (WF-18): card/address web-form field detection in the isolated world + per-field overlay icon + multi-choice picker. **Pairs with Slice 10 as the autofill block** (shared `SurfrCore` extraction); deferrable without blocking TV-1/TV-2. | med–high |
 
 **Sequencing**
@@ -393,7 +407,10 @@ Free-form: account nickname, holder name, notes. Validators land as pure `SurfrC
 - **TV-2b done** — Payment Method detail/edit (WF-17): masked card-number/CVV with biometric reveal/copy
   (Slice-5 path), prefix card-network detection, and the cleartext last-4/network hint for zero-decryption
   Payment rows. All four current types (login/note/address/payment) now have full views.
-- **TV-2c** (optional) — first-class Bank Account (else it stays a generic Secure Note).
+- **TV-2c done** — first-class **Bank Account** (fifth structured type), modelled on WF-17 Payment: masked
+  account number / IBAN / PIN with biometric reveal, "Routing Number"→Sort code parse, cleartext
+  account-last-4 hint for zero-decryption Bank rows, soft validation, and the `NoteType:Bank Account`
+  re-classification. **All structured types now ship; the typed vault is complete** (remaining: TV-3 web fill).
 - **TV-3 pairs with Slice 10 as the autofill block**, sharing the `SurfrCore` extraction
   (`LoginPayload` / PSL / matcher relocation).
 - Lands **after Slice 9 commits**. Recommended before Slice 10 (it fixes real imported-data handling
@@ -411,7 +428,7 @@ Free-form: account nickname, holder name, notes. Validators land as pure `SurfrC
 
 | Question | Lean |
 |----|----|
-| Long-tail types (Passport, SSN, Bank Account, Wi-Fi…) — generic Secure Note for v1, or any first-class? | Generic note (raw body preserved); first-class editors are post-v1 backlog. |
+| Long-tail types (Passport, SSN, Bank Account, Wi-Fi…) — generic Secure Note for v1, or any first-class? | **Bank Account is now first-class (TV-2c).** The rest (Passport, SSN, Wi-Fi…) stay generic Secure Notes (raw body preserved); their structured editors are post-v1 backlog. |
 | TV-3 (card/address web-fill) in this v1 push, or defer web-fill and ship TV-1/TV-2 first? | A commits to click-to-fill, so it's in the design — but TV-3 is structured to defer cleanly. |
 | Note body — biometric-gate the whole body on open, or rely on vault-unlock only? | Vault-unlock only; copy is concealed-clipboard. Flag if you want a per-note reveal gate. |
 | Card type — auto-detect from number, with manual override? | Auto-detect (local prefix match) + override. No network. |
