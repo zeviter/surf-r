@@ -9,6 +9,9 @@ enum ShortcutID: String, CaseIterable, Codable {
     case bookmark, trustSite
     case history, trustedSites, downloads, shortcuts, vault
     case fillLogin
+    case findInPage, findNext, findPrevious   // C2 — in-page find (⌘F context-routed / ⌘G / ⌘⇧G)
+    case savePage, printPage                   // C2 — ⌘S / ⌘P
+    case webInspector                          // C2 — ⌘⇧I (DEBUG builds only)
 }
 
 /// Grouping for the (later) shortcuts page/editor.
@@ -126,7 +129,7 @@ final class ShortcutRegistry: ObservableObject {
     private let overridesKey = "SurfrShortcutOverrides"
 
     private init() {
-        definitions = Self.defaults
+        definitions = Self.makeDefaults()
         overrides = Self.loadOverrides(key: "SurfrShortcutOverrides")
     }
 
@@ -240,7 +243,30 @@ final class ShortcutRegistry: ObservableObject {
         // Page actions
         .init(id: .fillLogin,        name: "Fill Login",                  detail: "Fill a saved login into the current page",
               category: .page,       defaultCombo: c("\\", [.command])),
+        // C2 browser-shell — in-page find, save, print
+        .init(id: .findInPage,       name: "Find on Page",                detail: "Find text on the current page (vault search in the vault)",
+              category: .page,       defaultCombo: c("f", [.command])),
+        .init(id: .findNext,         name: "Find Next",                   detail: "Jump to the next find match",
+              category: .page,       defaultCombo: c("g", [.command])),
+        .init(id: .findPrevious,     name: "Find Previous",               detail: "Jump to the previous find match",
+              category: .page,       defaultCombo: c("g", [.command, .shift])),
+        .init(id: .savePage,         name: "Save Page…",                  detail: "Save the current page as a web archive",
+              category: .page,       defaultCombo: c("s", [.command])),
+        .init(id: .printPage,        name: "Print…",                      detail: "Print the current page (or save as PDF)",
+              category: .page,       defaultCombo: c("p", [.command])),
     ]
+
+    /// Defaults, plus the DEBUG-only Web Inspector (⌘⇧I). Kept out of release builds so the shortcuts page
+    /// never lists an inert binding (the inspector is gated on `isInspectable`, DEBUG only).
+    private static func makeDefaults() -> [ShortcutDefinition] {
+        var defs = defaults
+        #if DEBUG
+        defs.append(.init(id: .webInspector, name: "Web Inspector",
+                          detail: "Open the Safari Web Inspector for this page (debug builds)",
+                          category: .page, defaultCombo: c("i", [.command, .shift])))
+        #endif
+        return defs
+    }
 
     private static let reserved: [KeyCombo] = [
         c("q", [.command]),            // Quit

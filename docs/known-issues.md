@@ -15,6 +15,8 @@ Parked edge cases — documented for transparency, not scheduled for a fix yet.
 | Issue | Current behaviour | Severity | Notes / workaround |
 |---|---|---|---|
 | Right-click "Inspect Element" uses private API | The `developerExtrasEnabled` preference is set via KVC in **DEBUG only** (compiled out of release); it's an undocumented WebKit key that may change or break on a future macOS version. | Low — DEBUG tooling only | If it stops working, fall back to Safari's Develop menu (the `isInspectable` path). |
+| `⌘⇧I` Web Inspector is DEBUG-only + uses private API | C2 wired `⌘⇧I` to open the inspector via the private `_inspector` `show` selector, **DEBUG only** (the registry definition, menu command, and handler are all `#if DEBUG`). Release builds have no `⌘⇧I` and no inspector. **Decision:** kept DEBUG-only — exposing a web inspector in release is a privacy/footgun tradeoff (and `isInspectable`/`developerExtrasEnabled` are DEBUG-gated anyway). | Low — by design | Revisit release exposure later if wanted; for now use a DEBUG build (or Safari's Develop menu via `isInspectable`). |
+| In-page find shows no match count ("3/17") | C2 `⌘F` uses the native `WKWebView.find` API, which highlights/scrolls/wraps but whose public `WKFindResult` reports only **match-found** — no index/total. The find bar shows *found / "No matches"* rather than "3/17". | Low — cosmetic | A numeric count would need private WebKit API or an injected JS find script, both rejected by the native-over-injected principle. Deferred unless a private/JS path is later accepted. |
 
 ## Pop-up gate (`Surfr/Surfr/ContentView.swift`)
 

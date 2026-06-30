@@ -142,6 +142,42 @@ struct SurfrApp: App {
                 }
                 .appShortcut(.fillLogin, shortcuts)
 
+                Divider()
+
+                // C2 — in-page find (⌘F context-routed in the handler), next/previous, save, print.
+                Button("Find on Page") {
+                    NotificationCenter.default.post(name: .findInPage, object: nil)
+                }
+                .appShortcut(.findInPage, shortcuts)
+
+                Button("Find Next") {
+                    NotificationCenter.default.post(name: .findNext, object: nil)
+                }
+                .appShortcut(.findNext, shortcuts)
+
+                Button("Find Previous") {
+                    NotificationCenter.default.post(name: .findPrevious, object: nil)
+                }
+                .appShortcut(.findPrevious, shortcuts)
+
+                Button("Save Page…") {
+                    NotificationCenter.default.post(name: .savePage, object: nil)
+                }
+                .appShortcut(.savePage, shortcuts)
+
+                Button("Print…") {
+                    NotificationCenter.default.post(name: .printPage, object: nil)
+                }
+                .appShortcut(.printPage, shortcuts)
+
+                #if DEBUG
+                // ⌘⇧I — Web Inspector (DEBUG only; the inspector is gated on `isInspectable`).
+                Button("Web Inspector") {
+                    NotificationCenter.default.post(name: .webInspector, object: nil)
+                }
+                .appShortcut(.webInspector, shortcuts)
+                #endif
+
                 #if DEBUG
                 Button("Run History Self-Test") {
                     Task { await HistoryStore.shared.runSelfTest() }

@@ -40,6 +40,18 @@ extension Notification.Name {
     static let resetVault = Notification.Name("resetVault")
     /// Autofill (F5, Slice 8a): ⌘\ — summon the inline credential picker for the active page.
     static let fillCredential = Notification.Name("fillCredential")
+    /// C2 — in-page find (⌘F, context-routed: find bar on a web tab, vault search in the vault) + ⌘G/⌘⇧G.
+    static let findInPage = Notification.Name("findInPage")
+    static let findNext = Notification.Name("findNext")
+    static let findPrevious = Notification.Name("findPrevious")
+    /// C2 — focus the vault list's search field (posted by the ⌘F router when the vault surface is active).
+    static let focusVaultSearch = Notification.Name("focusVaultSearch")
+    /// C2 — save / print the active page (⌘S / ⌘P), and (DEBUG) open the Web Inspector (⌘⇧I).
+    static let savePage = Notification.Name("savePage")
+    static let printPage = Notification.Name("printPage")
+    static let webInspector = Notification.Name("webInspector")
+    /// C2 — switch to an already-open tab chosen from the omnibox (userInfo["id"] = Tab.ID).
+    static let switchToTab = Notification.Name("switchToTab")
 }
 
 private let homeURL = URL(string: "https://duckduckgo.com")!
@@ -1464,6 +1476,8 @@ struct ActiveTabContent: View {
     @ObservedObject var tab: Tab
     let onNavigate: (URL, Bool) -> Void
     let focusToken: Int
+    /// Open tabs for the new-tab page's switch-to-tab omnibox source (C2).
+    var openTabs: [OpenTabRef] = []
 
     var body: some View {
         switch tab.kind {
@@ -1483,7 +1497,7 @@ struct ActiveTabContent: View {
                 WebView(webView: tab.webView)
                     .id(ObjectIdentifier(tab.webView))
             } else {
-                NewTabPage(tab: tab, onNavigate: onNavigate, focusToken: focusToken)
+                NewTabPage(tab: tab, onNavigate: onNavigate, focusToken: focusToken, openTabs: openTabs)
             }
         }
     }
@@ -1545,6 +1559,19 @@ private struct BrowserCommandHandlers: ViewModifier {
 private struct PendingFill { let item: StoredItem; let frame: WKFrameInfo?; let usernameOnly: Bool }
 private struct PendingTypedFill { let item: StoredItem; let family: String }   // family: "card" | "address" (TV-3a)
 
+/// C2 — the DEBUG-only ⌘⇧I Web Inspector handler; a passthrough in release builds (the menu command and
+/// the `.webInspector` post are also `#if DEBUG`, so this never fires there).
+private struct DebugInspectorShortcut: ViewModifier {
+    let onTrigger: () -> Void
+    func body(content: Content) -> some View {
+        #if DEBUG
+        content.onReceive(NotificationCenter.default.publisher(for: .webInspector)) { _ in onTrigger() }
+        #else
+        content
+        #endif
+    }
+}
+
 struct ContentView: View {
     @StateObject private var browser = BrowserState()
     /// Context A overlay presented (only on a loaded page).
@@ -1579,6 +1606,11 @@ struct ContentView: View {
     @State private var pendingTypedMasterFill: PendingTypedFill?
     /// Transient browser-chrome confirmation (fill / errors), same toast pattern as the vault.
     @State private var browserToast: String?
+    // C2 — in-page find bar (web tab only; ⌘F routes to vault search in the vault).
+    @State private var showFindBar = false
+    @State private var findText = ""
+    @State private var findFocusToken = 0
+    @State private var findNoMatches = false
     /// ⌘\ on a locked vault: after unlocking, stay on the web page and complete the fill instead of
     /// ejecting into the vault surface.
     @State private var fillAfterUnlock = false
@@ -1598,8 +1630,10 @@ struct ContentView: View {
                 // loaded web view — no persistent address bar (zero chrome).
                 // `ActiveTabContent` observes the tab so it follows a store swap.
                 ActiveTabContent(tab: browser.activeTab, onNavigate: navigate,
-                                 focusToken: newTabFocusToken)
+                                 focusToken: newTabFocusToken, openTabs: openTabRefs)
                     .id(browser.activeTabID)
+
+                c2ShortcutSink   // hidden: C2 find / save / print / inspector / switch-to-tab handlers
 
                 // 8e: per-field click-to-fill key icons, native overlay over the web view (not page
                 // DOM). Top-leading origin so anchor viewport coords map directly.
@@ -1611,13 +1645,23 @@ struct ContentView: View {
                     TypedFieldOverlay(controller: browser.activeTab.autofill) { family in summonTypedFill(family) }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                         .allowsHitTesting(true)
+                    // C2: in-page find bar (top-trailing), native WebKit find — only on a web tab.
+                    if showFindBar {
+                        FindBar(text: $findText, focusToken: findFocusToken, noMatches: findNoMatches,
+                                onNext: { Task { await runFind(backwards: false) } },
+                                onPrevious: { Task { await runFind(backwards: true) } },
+                                onClose: closeFindBar)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                            .padding(.top, 12).padding(.trailing, 12)
+                            .onChange(of: findText) { _, _ in Task { await runFind(backwards: false) } }
+                    }
                 }
 
                 // Context A: the summoned overlay, over the dimmed page. The
                 // per-summon token id forces a fresh field + focus each time.
                 if showSpotlight {
                     SpotlightOverlay(initialText: spotlightPrefill, focusToken: spotlightToken,
-                                     onNavigate: navigate, onClose: closeSpotlight)
+                                     openTabs: openTabRefs, onNavigate: navigate, onClose: closeSpotlight)
                         .id(spotlightToken)
                 }
 
@@ -1796,7 +1840,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .fillCredential)) { _ in
             summonAutofill()
         }
-        .onChange(of: browser.activeTabID) { _, _ in autofillCandidates = []; typedFillCandidates = []; saveCoordinator.dismiss() }   // tab switch: drop pickers + pending save (zeroed)
+        .onChange(of: browser.activeTabID) { _, _ in autofillCandidates = []; typedFillCandidates = []; closeFindBar(); saveCoordinator.dismiss() }   // tab switch: drop pickers + find bar + pending save (zeroed)
         .onReceive(NotificationCenter.default.publisher(for: .toggleBookmark)) { _ in
             let webView = browser.activeTab.webView
             guard let url = webView.url else { return }
@@ -1927,6 +1971,57 @@ struct ContentView: View {
     private var spotlightPrefill: String {
         let tab = browser.activeTab
         return (tab.kind == .web && tab.hasNavigated) ? tab.url.absoluteString : ""
+    }
+
+    /// C2 — the omnibox switch-to-tab source: every navigated web tab EXCEPT the active one (switching to
+    /// the tab you're on is meaningless). A value snapshot, recomputed each render.
+    private var openTabRefs: [OpenTabRef] {
+        browser.tabs
+            .filter { $0.kind == .web && $0.hasNavigated && $0.id != browser.activeTabID }
+            .map { OpenTabRef(id: $0.id, title: $0.title, url: $0.url) }
+    }
+
+    /// C2 — a hidden sink carrying the new browser-shell shortcut handlers (find / save / print / inspector /
+    /// switch-to-tab). Kept on its own simple base view so the main body's modifier chain stays within the
+    /// Swift type-checker's budget (adding these inline tripped a type-check timeout).
+    private var c2ShortcutSink: some View {
+        Color.clear.frame(width: 0, height: 0)
+            // Switch to an already-open tab chosen from the omnibox (pristine source tab is discarded by
+            // the activeTabID didSet); closes the spotlight overlay.
+            .onReceive(NotificationCenter.default.publisher(for: .switchToTab)) { note in
+                guard let id = note.userInfo?["id"] as? Tab.ID, browser.tabs.contains(where: { $0.id == id }) else { return }
+                browser.activeTabID = id
+                showSpotlight = false
+            }
+            // ⌘F context-routed: in-page find on a web tab, vault search in the vault (the global menu
+            // shortcut would otherwise shadow the vault's ⌘F), nothing on other surfaces (as today).
+            .onReceive(NotificationCenter.default.publisher(for: .findInPage)) { _ in
+                switch browser.activeTab.kind {
+                case .web:
+                    guard browser.activeTab.hasNavigated else { return }   // no find on the new-tab page
+                    showFindBar = true; findFocusToken += 1
+                case .vault:
+                    NotificationCenter.default.post(name: .focusVaultSearch, object: nil)
+                default:
+                    break
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .findNext)) { _ in
+                if showFindBar { Task { await runFind(backwards: false) } }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .findPrevious)) { _ in
+                if showFindBar { Task { await runFind(backwards: true) } }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .savePage)) { _ in savePage() }
+            .onReceive(NotificationCenter.default.publisher(for: .printPage)) { _ in printPage() }
+            .modifier(DebugInspectorShortcut { openInspectorIfDebug() })
+    }
+
+    /// DEBUG ⌘⇧I forwards here; a no-op in release (the menu command + handler are compiled out).
+    private func openInspectorIfDebug() {
+        #if DEBUG
+        openInspector()
+        #endif
     }
 
     /// Enter → navigate the current tab; ⌘Enter → open in a new foreground tab.
@@ -2099,6 +2194,86 @@ struct ContentView: View {
             if browserToast == message { browserToast = nil }
         }
     }
+
+    // MARK: - C2 in-page find / save / print / inspector (native; no injected JS)
+
+    /// Native WebKit find — the engine highlights, scrolls-to-match, and wraps. `WKFindResult` reports only
+    /// match-found (no index/count), so the bar shows found / no-matches rather than "3/17" (a numeric count
+    /// would need private API or a JS find script, both rejected by the native-over-injected principle).
+    private func runFind(backwards: Bool) async {
+        guard browser.activeTab.kind == .web else { return }
+        let q = findText
+        guard !q.isEmpty else { findNoMatches = false; return }
+        let cfg = WKFindConfiguration()
+        cfg.backwards = backwards
+        cfg.caseSensitive = false
+        cfg.wraps = true
+        let result = try? await browser.activeTab.webView.find(q, configuration: cfg)
+        findNoMatches = (result?.matchFound != true)
+    }
+
+    private func closeFindBar() {
+        showFindBar = false
+        findText = ""
+        findNoMatches = false
+    }
+
+    /// ⌘S — save the current page as a `.webarchive` (the native single-file complete-page format) to a
+    /// user-chosen location via `NSSavePanel` (reuses the User-Selected-File entitlement; no new one).
+    private func savePage() {
+        let tab = browser.activeTab
+        guard tab.kind == .web, tab.hasNavigated else { return }
+        let suggested = Self.saneFileBase(tab.title.isEmpty ? (tab.url.host ?? "page") : tab.title)
+        tab.webView.createWebArchiveData { result in
+            switch result {
+            case .success(let data):
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = "\(suggested).webarchive"
+                panel.allowedContentTypes = [UTType("com.apple.webarchive") ?? .data]
+                panel.canCreateDirectories = true
+                guard panel.runModal() == .OK, let url = panel.url else { return }
+                do { try data.write(to: url, options: .atomic); showBrowserToast("Saved page") }
+                catch { showBrowserToast("Couldn’t save the page") }
+            case .failure:
+                showBrowserToast("Couldn’t save this page")
+            }
+        }
+    }
+
+    /// ⌘P — print / save-as-PDF via the native `WKWebView.printOperation` (reuses the `NSPrintOperation`
+    /// path touched for the Recovery Kit). The OS print panel owns PDF export.
+    private func printPage() {
+        let tab = browser.activeTab
+        guard tab.kind == .web, tab.hasNavigated else { return }
+        let op = tab.webView.printOperation(with: NSPrintInfo.shared)
+        op.canSpawnSeparateThread = true
+        if let window = NSApp.keyWindow {
+            op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
+        } else {
+            op.run()
+        }
+    }
+
+    /// Filesystem-safe base name for a saved page (strips path-hostile characters, caps length).
+    private static func saneFileBase(_ s: String) -> String {
+        let cleaned = s.components(separatedBy: CharacterSet(charactersIn: "/\\:?%*|\"<>"))
+            .joined(separator: " ").trimmingCharacters(in: .whitespaces)
+        return cleaned.isEmpty ? "page" : String(cleaned.prefix(80))
+    }
+
+    #if DEBUG
+    /// DEBUG-only ⌘⇧I — open the Safari Web Inspector via the private `_inspector` (consistent with the
+    /// existing DEBUG-only `developerExtrasEnabled` KVC; the inspector is gated on `isInspectable`). No-ops
+    /// if the private API is unavailable — right-click "Inspect Element" remains the fallback. Never in release.
+    private func openInspector() {
+        let tab = browser.activeTab
+        guard tab.kind == .web else { return }
+        if let inspector = tab.webView.value(forKey: "_inspector") as? NSObject,
+           inspector.responds(to: Selector(("show"))) {
+            inspector.perform(Selector(("show")))
+        }
+    }
+    #endif
 
     /// Close the overlay with no navigation and return focus to the web content.
     private func closeSpotlight() {

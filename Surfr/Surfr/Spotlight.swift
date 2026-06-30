@@ -5,9 +5,10 @@ import Combine
 // MARK: - Suggestions
 
 enum SuggestionSource {
-    case history, bookmark, search
+    case openTab, history, bookmark, search
     var icon: String {
         switch self {
+        case .openTab: return "macwindow"
         case .history: return "clock"
         case .bookmark: return "star"
         case .search: return "magnifyingglass"
@@ -20,6 +21,17 @@ struct Suggestion: Identifiable {
     let source: SuggestionSource
     let title: String
     let subtitle: String
+    let url: URL
+    /// Set for an **open-tab** suggestion (C2) — selecting it switches to this existing tab instead of
+    /// navigating. `nil` for history/bookmark/search rows.
+    var tabID: UUID? = nil
+}
+
+/// A lightweight snapshot of an open web tab for the omnibox switch-to-tab source (C2). Value-typed so
+/// it can be passed into the suggestion builder without retaining the live `Tab`.
+struct OpenTabRef: Equatable {
+    let id: UUID
+    let title: String
     let url: URL
 }
 
@@ -38,6 +50,9 @@ struct SpotlightOmnibox: View {
     let onEscape: (() -> Void)?
     /// Bump to focus + select-all the field (⌘L); also focuses on first appearance.
     let focusToken: Int
+    /// Open web tabs to offer as a switch-to-tab source (C2). Default empty so existing call sites are
+    /// unaffected; ContentView passes the real snapshot.
+    var openTabs: [OpenTabRef] = []
 
     @State private var suggestions: [Suggestion] = []
     @State private var highlight = -1   // -1 = the typed text itself; 0… = a suggestion
@@ -62,7 +77,7 @@ struct SpotlightOmnibox: View {
                     ForEach(Array(suggestions.enumerated()), id: \.element.id) { index, suggestion in
                         SuggestionRow(suggestion: suggestion, highlighted: index == highlight)
                             .contentShape(Rectangle())
-                            .onTapGesture { onNavigate(suggestion.url, false) }
+                            .onTapGesture { choose(suggestion, newTab: false) }   // click = switch / navigate
                     }
                 }
                 .padding(.bottom, 6)
@@ -80,7 +95,7 @@ struct SpotlightOmnibox: View {
         }
         .task(id: text) {
             highlight = -1
-            suggestions = await Self.loadSuggestions(for: text)
+            suggestions = await Self.loadSuggestions(for: text, openTabs: openTabs)
         }
     }
 
@@ -91,9 +106,21 @@ struct SpotlightOmnibox: View {
 
     private func submit(newTab: Bool) {
         if highlight >= 0, highlight < suggestions.count {
-            onNavigate(suggestions[highlight].url, newTab)
+            choose(suggestions[highlight], newTab: newTab)
         } else if let url = Omnibox.resolve(Self.collapse(text)) {
             onNavigate(url, newTab)
+        }
+    }
+
+    /// Act on a chosen suggestion. An **open-tab** suggestion (C2): plain Enter / click **switches** to the
+    /// existing tab (via the `.switchToTab` notification, which also dismisses the overlay and discards a
+    /// pristine source tab); **⌘Enter** keeps its universal "new tab" meaning and opens a fresh tab to that
+    /// URL (an explicit duplicate the user asked for). All other rows navigate as before.
+    private func choose(_ suggestion: Suggestion, newTab: Bool) {
+        if let tabID = suggestion.tabID, !newTab {
+            NotificationCenter.default.post(name: .switchToTab, object: nil, userInfo: ["id": tabID])
+        } else {
+            onNavigate(suggestion.url, newTab)
         }
     }
 
@@ -108,7 +135,7 @@ struct SpotlightOmnibox: View {
     /// frequency + a bookmark boost), keep the recent-history → bookmarks ordering as
     /// the tie-break, dedupe by URL, cap at 7, then append the DuckDuckGo search row
     /// last. Total capped at 8.
-    static func loadSuggestions(for raw: String) async -> [Suggestion] {
+    static func loadSuggestions(for raw: String, openTabs: [OpenTabRef] = []) async -> [Suggestion] {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if query.isEmpty {
@@ -120,6 +147,11 @@ struct SpotlightOmnibox: View {
             }
             return Array(out.prefix(8))
         }
+
+        // C2 — open tabs first (a stronger intent signal than history/bookmarks). Their URLs are claimed
+        // in `seenURLs` so a matching history/bookmark row doesn't duplicate them.
+        let openTabSuggestions = matchingOpenTabs(query: query, openTabs: openTabs)
+        var seenURLs = Set(openTabSuggestions.map { $0.url.absoluteString })
 
         // Score a pool of candidates. `order` preserves source/recency order so
         // equal scores fall back to "recent history before bookmarks".
@@ -145,11 +177,11 @@ struct SpotlightOmnibox: View {
 
         scored.sort { $0.score != $1.score ? $0.score > $1.score : $0.order < $1.order }
 
-        // Dedupe by URL (keep the highest-scored occurrence), cap at 7.
-        var seen = Set<String>()
-        var result: [Suggestion] = []
+        // Open tabs lead; then history/bookmarks deduped by URL (open-tab URLs already claimed in
+        // `seenURLs` so they don't repeat). Cap the non-search rows at 7, then the search row last.
+        var result: [Suggestion] = openTabSuggestions
         for item in scored {
-            guard seen.insert(item.suggestion.url.absoluteString).inserted else { continue }
+            guard seenURLs.insert(item.suggestion.url.absoluteString).inserted else { continue }
             result.append(item.suggestion)
             if result.count == 7 { break }
         }
@@ -160,6 +192,23 @@ struct SpotlightOmnibox: View {
                                      subtitle: "", url: searchURL))
         }
         return Array(result.prefix(8))
+    }
+
+    /// C2 — open-tab matches for the switch-to-tab source. Match by title OR URL (case-insensitive),
+    /// dedupe by URL, cap at 4 (keeps the stack readable; extras fall through to history/search). Each row
+    /// carries the tab's id so selecting it switches rather than navigates. Pure (no DB) — unit-tested.
+    static func matchingOpenTabs(query: String, openTabs: [OpenTabRef]) -> [Suggestion] {
+        let q = query.lowercased()
+        guard !q.isEmpty else { return [] }
+        var out: [Suggestion] = []
+        var seen = Set<String>()
+        for t in openTabs where t.title.lowercased().contains(q) || t.url.absoluteString.lowercased().contains(q) {
+            guard seen.insert(t.url.absoluteString).inserted else { continue }
+            out.append(Suggestion(source: .openTab, title: t.title, subtitle: t.url.absoluteString,
+                                  url: t.url, tabID: t.id))
+            if out.count == 4 { break }
+        }
+        return out
     }
 
     /// Relevance score for a candidate (higher = better). Predictable blend:
@@ -310,13 +359,17 @@ struct SpotlightOverlay: View {
     let focusToken: Int
     let onNavigate: (URL, Bool) -> Void
     let onClose: () -> Void
+    /// Open tabs for the switch-to-tab source (C2).
+    var openTabs: [OpenTabRef] = []
 
     @State private var text: String
 
     /// `initialText` is the current URL on a loaded page (pre-filled, auto-selected)
     /// and "" on internal pages (history/trusted/etc.) where there's no URL.
-    init(initialText: String, focusToken: Int, onNavigate: @escaping (URL, Bool) -> Void, onClose: @escaping () -> Void) {
+    init(initialText: String, focusToken: Int, openTabs: [OpenTabRef] = [],
+         onNavigate: @escaping (URL, Bool) -> Void, onClose: @escaping () -> Void) {
         self.focusToken = focusToken
+        self.openTabs = openTabs
         self.onNavigate = onNavigate
         self.onClose = onClose
         _text = State(initialValue: initialText)
@@ -333,7 +386,8 @@ struct SpotlightOverlay: View {
                 large: false,
                 onNavigate: { url, newTab in onNavigate(url, newTab); onClose() },
                 onEscape: onClose,
-                focusToken: focusToken
+                focusToken: focusToken,
+                openTabs: openTabs
             )
             .frame(width: 600)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
@@ -356,6 +410,8 @@ struct NewTabPage: View {
     @ObservedObject private var bookmarkState = BookmarkState.shared
     let onNavigate: (URL, Bool) -> Void
     let focusToken: Int
+    /// Open tabs for the switch-to-tab source (C2).
+    var openTabs: [OpenTabRef] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -365,7 +421,8 @@ struct NewTabPage: View {
                 large: true,
                 onNavigate: onNavigate,
                 onEscape: nil,            // permanent — no Esc/click-away
-                focusToken: focusToken
+                focusToken: focusToken,
+                openTabs: openTabs
             )
             .frame(width: 620)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))

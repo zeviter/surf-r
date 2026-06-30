@@ -121,11 +121,9 @@ struct VaultListView: View {
             // Uses a window-level key catcher so it works regardless of which control holds focus
             // (the editor's Cancel button keeps its own .cancelAction; both pop one level, no double).
             .background(EscapeCatcher { escape() })
-            // ⌘F focuses the search field.
-            .background {
-                Button("") { searchFocusToken += 1 }
-                    .keyboardShortcut("f", modifiers: .command).opacity(0)
-            }
+            // ⌘F focuses the vault search field. C2 routes ⌘F by surface (the global menu shortcut would
+            // otherwise shadow this), posting `.focusVaultSearch` when the vault is the active surface.
+            .onReceive(NotificationCenter.default.publisher(for: .focusVaultSearch)) { _ in searchFocusToken += 1 }
             // ONE sheet modifier — multiple `.sheet`s on a single view conflict in SwiftUI (the 3rd
             // broke the TOTP done/failed phases from rendering: missing delete prompt / no error).
             .sheet(item: Binding(get: { activeSheet }, set: { if $0 == nil { dismissSheets() } })) { sheet in

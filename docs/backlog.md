@@ -141,32 +141,34 @@
 - ☐ **Custom title bar (unlocks).** Would enable a **centered window title** and a real **trusted
   badge graphic** in the title (currently text-only, "· Trusted: <Domain>"), both blocked by
   Tahoe's plain-text leading-aligned system title.
-## C2. Browser feature shortcuts (separate stream — NOT vault work)
+## C2. Browser feature shortcuts (separate stream — NOT vault work) — ✓ DONE
 
-- ☐ **Web Inspector shortcut `⌘⇧I`.** The DEBUG Web Inspector already exists via `isInspectable`;
-  this just wires the shortcut. **Decide:** keep it DEBUG-only, or expose in release (most browsers
-  do) — flag the privacy/footgun tradeoff before exposing.
-- ☐ **Save Page `⌘S`.** Reuses the existing **User-Selected-File Read/Write** entitlement +
-  `NSSavePanel` path already added for the Recovery Kit — **no new entitlement**. Confirm during build.
-- ☐ **Print / Print-to-PDF `⌘P`.** Reuses the `NSPrintOperation` path already touched for the
-  Recovery Kit.
-- ☐ **In-page find `⌘F` — core browser functionality, currently missing.** `⌘F` on a web page doesn't
-  open a find bar. Use the **native WebKit find API** (`WKWebView.find(_:configuration:)` — match
-  count, highlight, and scroll-to-match handled by the engine); **do not** inject a JS find/highlight
-  script (DOM manipulation on every page is a privacy seam, against the native-over-injected
-  principle). UI: a small find-bar overlay reusing the spotlight/flyout overlay + Esc-dismiss
-  vocabulary — query field, match count ("3/17"), next/previous (`⌘G` / `⌘⇧G`), close on Esc. **Scoping:**
-  `⌘F` currently means vault-list search when the vault surface is focused, so the shortcut registry
-  must route `⌘F` **by context** — in-page find on a web tab, vault search in the vault — without a conflict.
-- ☐ **Omnibox open-tab search (switch-to-tab).** Surface **already-open tabs** (across all hosts) as a
-  Spotlight suggestion source, so typing offers matching open tabs and selecting one **switches** to
-  that existing tab instead of opening a new one. Add "Open tabs" as a new source in the **existing
-  ranked suggestion stack** (recent history → bookmarks → search), ranked **above** history/bookmarks
-  (an open tab is a stronger intent signal), with its own source tag and a **switch-to** action (not
-  navigate). Selecting activates the real tab in its host group; if summoned from a pristine tab, that
-  pristine tab is discarded per the existing pristine-tab rule. Match by page title + URL. **Scoping:**
-  coexists **intentionally** with the flyout's per-host tab filter (`⌘F` for tabs) — flyout = within one
-  host, omnibox = across all open tabs; do **not** unify them.
+All five wired through the `ShortcutRegistry` (override ?? default), editable/visible on the shortcuts page.
+
+- ✓ **Web Inspector shortcut `⌘⇧I`.** Wired **DEBUG-only** (recommended: the inspector is gated on
+  `isInspectable`, also DEBUG). Opens via the private `_inspector` `show` (consistent with the existing
+  DEBUG-only `developerExtrasEnabled` KVC), no-op if unavailable (right-click "Inspect Element" remains the
+  fallback). Not compiled into release — the registry definition + menu command + handler are all `#if DEBUG`,
+  so release never lists an inert binding. (Release exposure deferred — privacy/footgun tradeoff; see
+  `known-issues.md`.)
+- ✓ **Save Page `⌘S`.** Saves the current page as a **`.webarchive`** (native single-file complete page) via
+  `WKWebView.createWebArchiveData` + `NSSavePanel` — reuses the User-Selected-File entitlement, **no new one**.
+- ✓ **Print / Print-to-PDF `⌘P`.** Native `WKWebView.printOperation(with:)` run modal-to-window (reuses the
+  `NSPrintOperation` path); the OS print panel owns PDF export.
+- ✓ **In-page find `⌘F`.** Native **WebKit find** (`WKWebView.find(_:configuration:)`) — engine handles
+  highlight / scroll-to-match / wrap; **no injected JS**. Find-bar overlay (spotlight field + Esc vocabulary):
+  query field, next/previous (`⌘G` / `⌘⇧G`, Enter = next, ↑/↓ cycle), close on Esc. **Context-routed:** `⌘F`
+  is in-page find on a web tab, vault search in the vault (the global menu shortcut would shadow the vault's
+  `⌘F`, so the handler posts `.focusVaultSearch`), nothing on other surfaces (as before). **Limitation:** the
+  public `WKFindResult` exposes only match-found, **not** a count/index, so the bar shows *found / no matches*
+  rather than "3/17" — a numeric count would need private API or a JS find script (both rejected). Noted in
+  `known-issues.md`.
+- ✓ **Omnibox open-tab search (switch-to-tab).** "Open tabs" is a new source in the ranked Spotlight stack,
+  ranked **above** history/bookmarks (stronger intent), matched by **title or URL** across all open tabs,
+  deduped, capped at 4. **Plain Enter / click switches** to the existing tab (via `.switchToTab`; pristine
+  source tab discarded by the existing rule); **⌘Enter** keeps its universal new-tab meaning (opens a fresh
+  tab to that URL). Coexists with the flyout's per-host `⌘F`-for-tabs filter (not unified). Pure
+  `matchingOpenTabs` matcher (unit-tested).
 
 ## C3. In-browser document view + edit (post-v1 — investigate best-in-class before building, NOT scheduled)
 

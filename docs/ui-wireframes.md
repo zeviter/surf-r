@@ -91,8 +91,14 @@ Hidden by default; summoned with **`⌘L`**. Two contexts:
 - **`⌘Enter`** → **ALWAYS open in a new (foreground) tab** — for a typed URL/search *and* for a
   highlighted suggestion. ⌘Enter universally means "new tab," whatever is selected.
 - **Suggestion list** below the input, ranked sensibly by relevance, ordered by source:
-  **recent history → bookmarks → search**. Each row tagged with its source. (Don't over-engineer
+  **open tabs → recent history → bookmarks → search**. Each row tagged with its source. (Don't over-engineer
   ranking; match established browser behaviour.)
+  - **Open-tab (switch-to-tab) source — C2 as-built.** Already-open web tabs (across all hosts) are surfaced
+    first (a stronger intent signal), matched by **title or URL**, deduped, capped at 4, with a `macwindow`
+    source glyph. **Plain `Enter` / click switches** to that existing tab (it doesn't navigate or duplicate;
+    a pristine source tab is discarded per the pristine rule); **`⌘Enter`** keeps its universal new-tab
+    meaning and opens a fresh tab to that URL. Coexists with the flyout's per-host `⌘F`-for-tabs filter
+    (flyout = within one host; omnibox = across all open tabs) — **not unified**.
 - Input parsing reuses existing omnibox logic (URL vs DuckDuckGo search). **Trim and collapse
   whitespace/newlines** before deciding, so a pasted URL with a trailing newline still navigates.
 
@@ -100,6 +106,15 @@ Hidden by default; summoned with **`⌘L`**. Two contexts:
 - The omnibox is **always visible** as a large stylised box near the top (not dismissable here),
   sitting **above the bookmarks grid**.
 - When hidden on a loaded page, the current URL is shown **nowhere** (zero chrome).
+
+### In-page find bar (C2 as-built)
+- **`⌘F` on a web tab** opens a small **find-bar overlay** (top-trailing), reusing the spotlight field +
+  **Esc-dismiss** vocabulary: query field, previous/next chevrons, close. Uses the **native WebKit find**
+  (engine highlights/scrolls/wraps) — **no injected JS**. `Enter` / `⌘G` = next, `↑` / `⌘⇧G` = previous,
+  `Esc` closes. Shows *No matches* when nothing is found (the public find API exposes no numeric count, so
+  there's no "3/17").
+- **`⌘F` is context-routed:** in-page find on a web tab, but **vault-list search** when the vault surface is
+  active (unchanged); other internal surfaces are unaffected.
 
 ## 6. New-tab page
 
