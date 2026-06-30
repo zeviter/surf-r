@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import Combine
 import UniformTypeIdentifiers
+import SurfrCore
 
 /// Drives the CSV import lifecycle with the **plaintext file as the central concern**: it holds a
 /// single security-scoped access window from pick → parse → import → delete, reads the file ONCE into

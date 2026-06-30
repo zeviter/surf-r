@@ -17,6 +17,9 @@ let package = Package(
         // Pinned to the EXACT version the app's Package.resolved carries (rev b83108d…) so the
         // package and the app can't drift on GRDB.
         .package(url: "https://github.com/groue/GRDB.swift", exact: "7.11.1"),
+        // Pinned to the app's exact PSL version (Slice 10-1: the registrable-domain core moved here so
+        // the app's TrustStore and the coming AutoFill extension share one eTLD+1 implementation).
+        .package(url: "https://github.com/ameshkov/swift-psl", exact: "1.1.145"),
     ],
     targets: [
         // Vendored Argon2id reference C (phc-winner-argon2, tag 20190702). See Sources/CArgon2/VENDORED.md.
@@ -31,6 +34,7 @@ let package = Package(
             dependencies: [
                 "CArgon2",
                 .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "PublicSuffixList", package: "swift-psl"),
             ],
             // Bundled, no-network datasets:
             //  • EFF large wordlist (7776 words, CC-BY 3.0) for the Diceware generator.
