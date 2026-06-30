@@ -117,6 +117,23 @@
   `NSSavePanel` path already added for the Recovery Kit — **no new entitlement**. Confirm during build.
 - ☐ **Print / Print-to-PDF `⌘P`.** Reuses the `NSPrintOperation` path already touched for the
   Recovery Kit.
+- ☐ **In-page find `⌘F` — core browser functionality, currently missing.** `⌘F` on a web page doesn't
+  open a find bar. Use the **native WebKit find API** (`WKWebView.find(_:configuration:)` — match
+  count, highlight, and scroll-to-match handled by the engine); **do not** inject a JS find/highlight
+  script (DOM manipulation on every page is a privacy seam, against the native-over-injected
+  principle). UI: a small find-bar overlay reusing the spotlight/flyout overlay + Esc-dismiss
+  vocabulary — query field, match count ("3/17"), next/previous (`⌘G` / `⌘⇧G`), close on Esc. **Scoping:**
+  `⌘F` currently means vault-list search when the vault surface is focused, so the shortcut registry
+  must route `⌘F` **by context** — in-page find on a web tab, vault search in the vault — without a conflict.
+- ☐ **Omnibox open-tab search (switch-to-tab).** Surface **already-open tabs** (across all hosts) as a
+  Spotlight suggestion source, so typing offers matching open tabs and selecting one **switches** to
+  that existing tab instead of opening a new one. Add "Open tabs" as a new source in the **existing
+  ranked suggestion stack** (recent history → bookmarks → search), ranked **above** history/bookmarks
+  (an open tab is a stronger intent signal), with its own source tag and a **switch-to** action (not
+  navigate). Selecting activates the real tab in its host group; if summoned from a pristine tab, that
+  pristine tab is discarded per the existing pristine-tab rule. Match by page title + URL. **Scoping:**
+  coexists **intentionally** with the flyout's per-host tab filter (`⌘F` for tabs) — flyout = within one
+  host, omnibox = across all open tabs; do **not** unify them.
 
 ## C3. In-browser document view + edit (post-v1 — investigate best-in-class before building, NOT scheduled)
 
