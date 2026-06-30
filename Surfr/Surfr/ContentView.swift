@@ -1610,7 +1610,9 @@ struct ContentView: View {
     @State private var showFindBar = false
     @State private var findText = ""
     @State private var findFocusToken = 0
-    @State private var findNoMatches = false
+    @State private var findTotal: Int?        // exact match count (WebKit's own); nil = count unavailable
+    @State private var findMatchFound = false // native find result (for the no-count fallback label)
+    @State private var findCurrentIndex = 0   // 1-based position as the user cycles next/previous
     /// ⌘\ on a locked vault: after unlocking, stay on the web page and complete the fill instead of
     /// ejecting into the vault surface.
     @State private var fillAfterUnlock = false
@@ -1647,13 +1649,13 @@ struct ContentView: View {
                         .allowsHitTesting(true)
                     // C2: in-page find bar (top-trailing), native WebKit find — only on a web tab.
                     if showFindBar {
-                        FindBar(text: $findText, focusToken: findFocusToken, noMatches: findNoMatches,
-                                onNext: { Task { await runFind(backwards: false) } },
-                                onPrevious: { Task { await runFind(backwards: true) } },
+                        FindBar(text: $findText, focusToken: findFocusToken, countLabel: findCountLabel,
+                                onNext: { Task { await runFind(backwards: false, newQuery: false) } },
+                                onPrevious: { Task { await runFind(backwards: true, newQuery: false) } },
                                 onClose: closeFindBar)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                             .padding(.top, 12).padding(.trailing, 12)
-                            .onChange(of: findText) { _, _ in Task { await runFind(backwards: false) } }
+                            .onChange(of: findText) { _, _ in Task { await runFind(backwards: false, newQuery: true) } }
                     }
                 }
 
@@ -2007,10 +2009,10 @@ struct ContentView: View {
                 }
             }
             .onReceive(NotificationCenter.default.publisher(for: .findNext)) { _ in
-                if showFindBar { Task { await runFind(backwards: false) } }
+                if showFindBar { Task { await runFind(backwards: false, newQuery: false) } }
             }
             .onReceive(NotificationCenter.default.publisher(for: .findPrevious)) { _ in
-                if showFindBar { Task { await runFind(backwards: true) } }
+                if showFindBar { Task { await runFind(backwards: true, newQuery: false) } }
             }
             .onReceive(NotificationCenter.default.publisher(for: .savePage)) { _ in savePage() }
             .onReceive(NotificationCenter.default.publisher(for: .printPage)) { _ in printPage() }
@@ -2197,25 +2199,52 @@ struct ContentView: View {
 
     // MARK: - C2 in-page find / save / print / inspector (native; no injected JS)
 
-    /// Native WebKit find — the engine highlights, scrolls-to-match, and wraps. `WKFindResult` reports only
-    /// match-found (no index/count), so the bar shows found / no-matches rather than "3/17" (a numeric count
-    /// would need private API or a JS find script, both rejected by the native-over-injected principle).
-    private func runFind(backwards: Bool) async {
+    /// The "3/17" label (or "No matches"); nil when the query is empty or the count is unavailable but a
+    /// match was found (then we show no number rather than a wrong one).
+    private var findCountLabel: String? {
+        guard !findText.isEmpty else { return nil }
+        if let total = findTotal {
+            return total == 0 ? "No matches" : "\(findCurrentIndex)/\(total)"
+        }
+        return findMatchFound ? nil : "No matches"   // private count unavailable: found → no number; none → "No matches"
+    }
+
+    /// Native WebKit find (engine highlights, scrolls-to-match, wraps) PLUS WebKit's **own** match count
+    /// (the private, defended `WebFindCounter`) so "3/17" exactly matches the highlighted matches — a JS DOM
+    /// count can't reconcile with WebKit's find on real web apps. `newQuery` (typing) re-counts and resets
+    /// the position to 1; next/previous step the position with wrap.
+    private func runFind(backwards: Bool, newQuery: Bool) async {
         guard browser.activeTab.kind == .web else { return }
         let q = findText
-        guard !q.isEmpty else { findNoMatches = false; return }
+        guard !q.isEmpty else { findTotal = nil; findMatchFound = false; findCurrentIndex = 0; return }
         let cfg = WKFindConfiguration()
         cfg.backwards = backwards
         cfg.caseSensitive = false
         cfg.wraps = true
-        let result = try? await browser.activeTab.webView.find(q, configuration: cfg)
-        findNoMatches = (result?.matchFound != true)
+        let result = try? await browser.activeTab.webView.find(q, configuration: cfg)   // highlight + scroll (native)
+        findMatchFound = (result?.matchFound == true)
+        guard findText == q else { return }                 // a newer keystroke superseded this one
+        let total = await WebFindCounter().count(q, in: browser.activeTab.webView)
+        guard findText == q else { return }
+        findTotal = total
+        if let total {
+            if newQuery {
+                findCurrentIndex = total > 0 ? 1 : 0
+            } else if total > 0 {
+                findCurrentIndex = backwards ? (findCurrentIndex <= 1 ? total : findCurrentIndex - 1)
+                                             : (findCurrentIndex >= total ? 1 : findCurrentIndex + 1)
+            } else {
+                findCurrentIndex = 0
+            }
+        }
     }
 
     private func closeFindBar() {
         showFindBar = false
         findText = ""
-        findNoMatches = false
+        findTotal = nil
+        findMatchFound = false
+        findCurrentIndex = 0
     }
 
     /// ⌘S — save the current page as a `.webarchive` (the native single-file complete-page format) to a
@@ -2246,7 +2275,9 @@ struct ContentView: View {
         let tab = browser.activeTab
         guard tab.kind == .web, tab.hasNavigated else { return }
         let op = tab.webView.printOperation(with: NSPrintInfo.shared)
-        op.canSpawnSeparateThread = true
+        op.view?.frame = tab.webView.bounds        // a non-zero print-view frame, else pagination fails
+        op.showsPrintPanel = true
+        op.showsProgressPanel = true
         if let window = NSApp.keyWindow {
             op.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
         } else {
@@ -2267,11 +2298,14 @@ struct ContentView: View {
     /// if the private API is unavailable — right-click "Inspect Element" remains the fallback. Never in release.
     private func openInspector() {
         let tab = browser.activeTab
-        guard tab.kind == .web else { return }
-        if let inspector = tab.webView.value(forKey: "_inspector") as? NSObject,
-           inspector.responds(to: Selector(("show"))) {
-            inspector.perform(Selector(("show")))
-        }
+        guard tab.kind == .web, let inspector = tab.webView.value(forKey: "_inspector") as? NSObject else { return }
+        // `connect` wires the inspector to the page, `show` reveals it. The private API only opens the
+        // inspector as a (connected) detached WINDOW — `attach` alone just toggles element-hover with no
+        // panel, so there's no programmatic path to the DOCKED pane that right-click "Inspect Element"
+        // gives. ⌘⇧I therefore opens the inspector window; right-click remains the docked path. DEBUG-only,
+        // guarded (no-op if the private API changes).
+        if inspector.responds(to: Selector(("connect"))) { inspector.perform(Selector(("connect"))) }
+        if inspector.responds(to: Selector(("show"))) { inspector.perform(Selector(("show"))) }
     }
     #endif
 

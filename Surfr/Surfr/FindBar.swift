@@ -1,17 +1,19 @@
 import SwiftUI
 
 /// C2 — the in-page find bar overlay: a small native chrome panel reusing the spotlight field +
-/// Esc-dismiss vocabulary. Native WebKit find does the highlight/scroll/wrap; this is just the query +
-/// controls. `WKFindResult` exposes only match-found (no index/count), so the bar shows a "No matches"
-/// state rather than "3/17" — a numeric count would need private API or an injected JS find script, both
-/// against the native-over-injected principle. Enter / ↓ = next, ⇧ via ↑ = previous (⌘G / ⌘⇧G also), Esc closes.
+/// Esc-dismiss vocabulary. Native WebKit find does the highlight/scroll/wrap; a count-only isolated-world
+/// script supplies the "3/17" total (the public `WKFindResult` has no count). Enter / ↓ = next, ↑ =
+/// previous (⌘G / ⌘⇧G also), Esc closes.
 struct FindBar: View {
     @Binding var text: String
     let focusToken: Int
-    let noMatches: Bool
+    /// "3/17" when found, "No matches" when not, nil for an empty query.
+    let countLabel: String?
     let onNext: () -> Void
     let onPrevious: () -> Void
     let onClose: () -> Void
+
+    private var noMatches: Bool { countLabel == "No matches" }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -20,8 +22,10 @@ struct FindBar: View {
             OmniboxField(text: $text, placeholder: "Find on page", large: false, focusToken: focusToken,
                          onMoveUp: onPrevious, onMoveDown: onNext, onSubmit: onNext, onCancel: onClose)
                 .frame(width: 190)
-            if !text.isEmpty && noMatches {
-                Text("No matches").font(.caption).foregroundStyle(.orange).fixedSize()
+            if let label = countLabel {
+                Text(label).font(.caption).monospacedDigit()
+                    .foregroundStyle(noMatches ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    .fixedSize()
             }
             Divider().frame(height: 16)
             Button(action: onPrevious) { Image(systemName: "chevron.up") }

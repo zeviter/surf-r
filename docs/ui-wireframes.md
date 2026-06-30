@@ -109,10 +109,10 @@ Hidden by default; summoned with **`⌘L`**. Two contexts:
 
 ### In-page find bar (C2 as-built)
 - **`⌘F` on a web tab** opens a small **find-bar overlay** (top-trailing), reusing the spotlight field +
-  **Esc-dismiss** vocabulary: query field, previous/next chevrons, close. Uses the **native WebKit find**
-  (engine highlights/scrolls/wraps) — **no injected JS**. `Enter` / `⌘G` = next, `↑` / `⌘⇧G` = previous,
-  `Esc` closes. Shows *No matches* when nothing is found (the public find API exposes no numeric count, so
-  there's no "3/17").
+  **Esc-dismiss** vocabulary: query field, **"3/17" match count**, previous/next chevrons, close. Uses the
+  **native WebKit find** (engine highlights/scrolls/wraps); the exact count comes from WebKit's own
+  (defended private) match counter so "3/17" matches the highlighted matches. `Enter` / `⌘G` = next,
+  `↑` / `⌘⇧G` = previous, `Esc` closes. Shows *No matches* when nothing is found.
 - **`⌘F` is context-routed:** in-page find on a web tab, but **vault-list search** when the vault surface is
   active (unchanged); other internal surfaces are unaffected.
 

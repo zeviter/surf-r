@@ -154,15 +154,19 @@ All five wired through the `ShortcutRegistry` (override ?? default), editable/vi
 - ✓ **Save Page `⌘S`.** Saves the current page as a **`.webarchive`** (native single-file complete page) via
   `WKWebView.createWebArchiveData` + `NSSavePanel` — reuses the User-Selected-File entitlement, **no new one**.
 - ✓ **Print / Print-to-PDF `⌘P`.** Native `WKWebView.printOperation(with:)` run modal-to-window (reuses the
-  `NSPrintOperation` path); the OS print panel owns PDF export.
+  `NSPrintOperation` path); the OS print panel owns PDF export. **Required the `com.apple.security.print`
+  sandbox entitlement** (WKWebView printing runs through the web content process) — added to
+  `Surfr.entitlements`; standard sandbox entitlement, applied at local signing, no Apple-portal step.
 - ✓ **In-page find `⌘F`.** Native **WebKit find** (`WKWebView.find(_:configuration:)`) — engine handles
-  highlight / scroll-to-match / wrap; **no injected JS**. Find-bar overlay (spotlight field + Esc vocabulary):
-  query field, next/previous (`⌘G` / `⌘⇧G`, Enter = next, ↑/↓ cycle), close on Esc. **Context-routed:** `⌘F`
-  is in-page find on a web tab, vault search in the vault (the global menu shortcut would shadow the vault's
-  `⌘F`, so the handler posts `.focusVaultSearch`), nothing on other surfaces (as before). **Limitation:** the
-  public `WKFindResult` exposes only match-found, **not** a count/index, so the bar shows *found / no matches*
-  rather than "3/17" — a numeric count would need private API or a JS find script (both rejected). Noted in
-  `known-issues.md`.
+  highlight / scroll-to-match / wrap; **no document-start/page-world JS**. Find-bar overlay (spotlight field +
+  Esc vocabulary): query field, **"3/17" match count**, next/previous (`⌘G` / `⌘⇧G`, Enter = next, ↑/↓ cycle),
+  close on Esc. **Context-routed:** `⌘F` is in-page find on a web tab, vault search in the vault (the global
+  menu shortcut would shadow the vault's `⌘F`, so the handler posts `.focusVaultSearch`), nothing on other
+  surfaces (as before). **Count:** the public `WKFindResult` has no count, and a JS DOM count can't reconcile
+  with WebKit's find on real web apps (over-counts hidden/duplicated DOM), so the exact total comes from
+  WebKit's **own** count — the **defended private** `_countStringMatches` + `_WKFindDelegate` (methods on
+  Apple's `WKWebView`, not a dependency; guarded so find degrades to no-number if the API ever changes). The
+  position is tracked as the user cycles. (We tried isolated-world count JS first; it diverged on web apps.)
 - ✓ **Omnibox open-tab search (switch-to-tab).** "Open tabs" is a new source in the ranked Spotlight stack,
   ranked **above** history/bookmarks (stronger intent), matched by **title or URL** across all open tabs,
   deduped, capped at 4. **Plain Enter / click switches** to the existing tab (via `.switchToTab`; pristine
