@@ -1,5 +1,20 @@
 import Foundation
 
+// MARK: - Deterministic typed-payload encoding
+//
+// All typed payloads encode through this single path so determinism is a property of the encoding
+// seam, not a per-type patch. `.sortedKeys` makes the byte output a pure function of the value:
+// without it `JSONEncoder` emits keys in unspecified (hash) order, so the same logical payload
+// re-encodes to different bytes. That matters because these bytes are AES-256-GCM-sealed — a no-op
+// decrypt → re-encode → re-seal of UNCHANGED data must yield identical plaintext, or it produces a
+// new ciphertext and spurious change-detection / dedup churn. A fresh encoder per call keeps this
+// free of shared mutable state.
+func encodeTypedPayload<T: Encodable>(_ value: T) throws -> Data {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    return try encoder.encode(value)
+}
+
 // MARK: - Typed payload shapes (decrypted; new JSON shapes under the SAME AES-256-GCM envelope)
 //
 // Typed vault TV-1 (docs/typed-vault-wireframes.md §1 WF-11, §10). `items.type` already distinguishes
@@ -28,7 +43,7 @@ public struct PaymentPayload: Codable, Equatable, Sendable {
         self.cvv = cvv; self.notes = notes; self.rawBody = rawBody
     }
 
-    public func encoded() throws -> Data { try JSONEncoder().encode(self) }
+    public func encoded() throws -> Data { try encodeTypedPayload(self) }
     public static func decoded(from data: Data) throws -> PaymentPayload {
         try JSONDecoder().decode(PaymentPayload.self, from: data)
     }
@@ -64,7 +79,7 @@ public struct AddressPayload: Codable, Equatable, Sendable {
         self.phone = phone; self.phoneCountry = phoneCountry; self.email = email; self.rawBody = rawBody
     }
 
-    public func encoded() throws -> Data { try JSONEncoder().encode(self) }
+    public func encoded() throws -> Data { try encodeTypedPayload(self) }
     public static func decoded(from data: Data) throws -> AddressPayload {
         try JSONDecoder().decode(AddressPayload.self, from: data)
     }
@@ -79,7 +94,7 @@ public struct SecureNotePayload: Codable, Equatable, Sendable {
 
     public init(title: String = "", body: String = "") { self.title = title; self.body = body }
 
-    public func encoded() throws -> Data { try JSONEncoder().encode(self) }
+    public func encoded() throws -> Data { try encodeTypedPayload(self) }
     public static func decoded(from data: Data) throws -> SecureNotePayload {
         try JSONDecoder().decode(SecureNotePayload.self, from: data)
     }
