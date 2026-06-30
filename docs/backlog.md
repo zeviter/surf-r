@@ -56,6 +56,20 @@
   vault work = the SYSTEM autofill block: S10-2** (`ASCredentialProviderExtension` target, Apple-gated)
   **+ S10-3** (QuickType / fill flows) — login/passkey only (Apple doesn't vend cards/addresses to other
   apps); the in-browser TV-3a path is separate and complete.
+  - ☐ **TV-3b — cross-origin payment-iframe card fill (DEFERRED, low priority; gated on a spike).** TV-3a
+    fills main + same-origin frames only, so card fields inside a **cross-origin PCI iframe** (Shopify
+    `*.shopifycs.com` / Stripe Elements / Adyen hosted fields) get no icon (same boundary as Slice-8
+    cross-origin login iframes; documented in `known-issues.md` — not a regression). **Precondition — do NOT
+    scope TV-3b until a small time-boxed SPIKE answers: can Stripe Elements / Shopify hosted card fields even
+    be programmatically filled?** They're framework-controlled inputs that may use native value-setters /
+    custom events / anti-fraud rejection of injected input. **If the spike shows the fields reject
+    programmatic fill → TV-3b is CLOSED, not deferred** (the rest of the slice would build nothing). **If
+    fillable**, scope: track typed anchors **per `WKFrameInfo`** (stop dropping subframe anchors); fill via
+    `callAsyncJavaScript(in: crossOriginFrame)`; the **per-field-icon GEOMETRY across the iframe boundary is
+    the worst part** (no clean `WKFrameInfo`→`<iframe>` rect API) → **MVP via a NON-geometry affordance**
+    (a shortcut / "fill card" badge targeting the detected card subframe, **not** the per-field icon);
+    **user-initiated only, scoped to recognized payment-field iframes** (a trust-boundary expansion). Reuses
+    the same deferral reasoning as Slice-8 cross-origin iframe fill.
   - ☐ **(post-v1) First-class long-tail editors** (Passport / Bank Account / Wi-Fi / SSH Key / SSN …):
     v1 keeps them as generic Secure Notes with the raw body preserved verbatim; structured editors deferred.
   - ☐ **(post-v1) "Convert type" flow** (e.g. note → payment): v1 is create-as-type only; a mis-imported
